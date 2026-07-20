@@ -6,17 +6,16 @@ app.use(express.json());
 
 const notion = new Client({ auth: process.env.NOTION_TOKEN });
 
-// '룰' 속성 값과 이미지 URL 매핑
 const IMAGE_MAP = {
   "어둠 속의 칼날": "https://image.aladin.co.kr/product/18153/52/cover200/8988060555_1.jpg"
-  // 추후 필요한 다른 룰 옵션들을 이곳에 계속 추가하시면 됩니다.
 };
 
-app.post('/api/webhook', async (req, res) => {
+// Express 엔드포인트를 '/api/webhook'이 아닌 '/' 또는 '/webhook'으로 설정
+app.post('/', async (req, res) => {
   try {
     const body = req.body;
 
-    // 1. 노션 웹훅 등록 시 검증(Verification) 요청 처리
+    // 1. 인증 토큰 검증 처리
     if (body.verification_token) {
       console.log("==========================================");
       console.log("NOTION VERIFICATION TOKEN:", body.verification_token);
@@ -25,7 +24,7 @@ app.post('/api/webhook', async (req, res) => {
       return res.status(200).json({ verification_token: body.verification_token });
     }
 
-    // 2. 실제 데이터 변경 이벤트 처리
+    // 2. 실제 업데이트 처리
     const { entity } = body;
     if (entity && entity.id) {
       const pageId = entity.id;
@@ -58,6 +57,11 @@ app.post('/api/webhook', async (req, res) => {
     console.error("[에러 발생]", error);
     return res.status(500).json({ error: error.message });
   }
+});
+
+// GET 요청 테스트용 (브라우저로 접속했을 때 404가 아니라는 것을 확인)
+app.get('/', (req, res) => {
+  res.send('Server is running!');
 });
 
 export default app;

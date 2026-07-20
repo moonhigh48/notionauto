@@ -1,36 +1,35 @@
 import express from 'express';
 import { Client } from '@notionhq/client';
-import dotenv from 'dotenv';
-
-dotenv.config();
 
 const app = express();
 app.use(express.json());
 
 const notion = new Client({ auth: process.env.NOTION_TOKEN });
 
-// 규칙별 적용할 외부 이미지 URL 매핑
+// '룰' 속성의 값과 그에 해당하는 이미지 URL 매핑
 const IMAGE_MAP = {
-  "규칙 A": "https://images.unsplash.com/photo-1579546929518-9e396f3cc809", // 예시 URL
-  "규칙 B": "https://images.unsplash.com/photo-1557683316-973673baf926",
-  "규칙 C": "https://images.unsplash.com/photo-1550684848-fac1c5b4e853"
+  "어둠 속의 칼날": "https://image.aladin.co.kr/product/18153/52/cover200/8988060555_1.jpg",
+  "룰 B": "https://example.com/image_b.png",
+  "룰 C": "https://example.com/image_c.png"
+  // 필요한 룰 항목을 여기에 추가하세요.
 };
 
 app.post('/api/webhook', async (req, res) => {
   try {
-    const { entity } = req.body; // 웹훅에서 전달된 데이터
+    const { entity } = req.body;
 
-    // 노션 페이지 업데이트 이벤트 확인
     if (entity && entity.id) {
       const pageId = entity.id;
       
-      // 해당 페이지 정보 조회
+      // 변경된 페이지 속성 조회
       const page = await notion.pages.retrieve({ page_id: pageId });
-      const selectedRule = page.properties["규칙"]?.select?.name;
+      
+      // '룰' 선택 속성의 현재 값 추출
+      const selectedRule = page.properties["룰"]?.select?.name;
       const targetImageUrl = IMAGE_MAP[selectedRule];
 
+      // 선택된 '룰'에 대응하는 이미지 URL이 존재하는 경우 업데이트
       if (selectedRule && targetImageUrl) {
-        // 사진 속성 업데이트
         await notion.pages.update({
           page_id: pageId,
           properties: {
@@ -45,7 +44,7 @@ app.post('/api/webhook', async (req, res) => {
             }
           }
         });
-        console.log(`[성공] Page: ${pageId} -> ${selectedRule} 이미지 변경 완료`);
+        console.log(`[성공] 페이지 ID ${pageId} : '룰' -> '${selectedRule}' 이미지 변경 완료`);
       }
     }
     return res.status(200).json({ success: true });
@@ -54,8 +53,5 @@ app.post('/api/webhook', async (req, res) => {
     return res.status(500).json({ error: error.message });
   }
 });
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
 export default app;

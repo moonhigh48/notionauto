@@ -2,8 +2,13 @@ import { Client } from '@notionhq/client';
 
 const notion = new Client({ auth: process.env.NOTION_TOKEN });
 
+// '룰' 속성 값과 이미지 URL 매핑
+const IMAGE_MAP = {
+  "어둠 속의 칼날": "https://image.aladin.co.kr/product/18153/52/cover200/8988060555_1.jpg"
+  // 추후 필요한 다른 룰과 이미지 URL을 여기에 계속 추가하면 돼.
+};
+
 export default async function handler(req, res) {
-  // 브라우저 접속 확인용 (GET)
   if (req.method === 'GET') {
     return res.status(200).send('API가 정상적으로 작동 중입니다!');
   }
@@ -12,26 +17,41 @@ export default async function handler(req, res) {
     try {
       const body = req.body;
 
-      // 1. 웹훅 등록 검증 처리
+      // 1. 웹훅 등록 및 인증 처리
       if (body.verification_token) {
         return res.status(200).json({ verification_token: body.verification_token });
       }
 
-      // 2. 이벤트 감지 및 로그 출력
+      // 2. 이벤트 감지 및 사진 속성 자동 업데이트
       const { entity } = body;
       if (entity && entity.id) {
         const pageId = entity.id;
         
-        // 노션 API로 페이지 데이터 조회
+        // 변경된 노션 페이지 정보 가져오기
         const page = await notion.pages.retrieve({ page_id: pageId });
         
-        // '룰' 선택 속성의 현재 값
+        // '룰' 선택 속성의 값 확인
         const selectedRule = page.properties["룰"]?.select?.name;
+        const targetImageUrl = IMAGE_MAP[selectedRule];
 
-        console.log("==========================================");
-        console.log(`[이벤트 감지] 페이지 ID: ${pageId}`);
-        console.log(`[선택된 룰]: ${selectedRule || "선택되지 않음(empty)"}`);
-        console.log("==========================================");
+        if (selectedRule && targetImageUrl) {
+          // '사진' 속성에 외부 이미지 링크 입력
+          await notion.pages.update({
+            page_id: pageId,
+            properties: {
+              "사진": {
+                files: [
+                  {
+                    name: `${selectedRule} 표지`,
+                    type: "external",
+                    external: { url: targetImageUrl }
+                  }
+                ]
+              }
+            }
+          });
+          console.log(`[성공] 페이지 ID ${pageId} : '룰' -> '${selectedRule}' 이미지 적용 완료`);
+        }
       }
 
       return res.status(200).json({ success: true });

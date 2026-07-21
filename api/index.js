@@ -10,7 +10,7 @@ const RULE_MAP = {
 
 // 2. '서플리먼트' 속성용 이미지 매핑
 const SUPPLEMENT_MAP = {
-  "CoC 입문 세트": "https://image.yes24.com/goods/95728858/XL",
+  "CoC 입문 세트": "https://image.aladin.co.kr/product/25679/68/cover500/8988060644_1.jpg",
   "이름 없는 공포들": "https://contents.kyobobook.co.kr/sih/fit-in/400x0/pdt/9788988060421.jpg?t=2974191"
 };
 

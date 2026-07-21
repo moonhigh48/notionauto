@@ -1,18 +1,16 @@
 {
   "name": "notion-image-auto",
   "version": "1.0.0",
-  "type":"module",
-  "description": "",
-  "main": "index.js",
+  "private": true,
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
-    "@notionhq/client": "^5.23.2",
-    "dotenv": "^17.4.2",
-    "express": "^5.2.1"
+    "@notionhq/client": "^2.2.15",
+    "next": "^14.2.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0"
   }
 }

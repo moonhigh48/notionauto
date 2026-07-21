@@ -3,7 +3,8 @@ import { Client } from '@notionhq/client';
 const notion = new Client({ auth: process.env.NOTION_TOKEN });
 
 const IMAGE_MAP = {
-  "어둠 속의 칼날": "https://image.aladin.co.kr/product/18153/52/cover200/8988060555_1.jpg"
+  "어둠 속의 칼날": "https://image.aladin.co.kr/product/18153/52/cover200/8988060555_1.jpg",
+  "CoC 7th": "https://image.yes24.com/goods/95728858/XL"
 };
 
 export default async function handler(req, res) {

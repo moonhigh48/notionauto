@@ -2,9 +2,16 @@ import { Client } from '@notionhq/client';
 
 const notion = new Client({ auth: process.env.NOTION_TOKEN });
 
-const IMAGE_MAP = {
+// 1. '룰' 속성용 이미지 매핑
+const RULE_MAP = {
   "어둠 속의 칼날": "https://image.aladin.co.kr/product/18153/52/cover200/8988060555_1.jpg",
-  "CoC 7th": "https://image.yes24.com/goods/95728858/XL"
+   "CoC 7th": "https://contents.kyobobook.co.kr/sih/fit-in/400x0/pdt/9788988060391.jpg?t=2974099"
+};
+
+// 2. '서플리먼트' 속성용 이미지 매핑 (필요한 서플리먼트명과 URL 추가)
+const SUPPLEMENT_MAP = {
+  "CoC 입문 세트": "https://image.yes24.com/goods/95728858/XL",
+  "이름 없는 공포들": "https://contents.kyobobook.co.kr/sih/fit-in/400x0/pdt/9788988060421.jpg?t=2974191"
 };
 
 export default async function handler(req, res) {
@@ -13,42 +20,47 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'POST') {
-    // 1. 요청 진입 로그 (웹훅 신호 도착 여부 확인)
-    console.log(">>> [웹훅 수신] POST 요청이 도착했습니다.");
-    console.log("수신 바디:", JSON.stringify(req.body, null, 2));
-
     try {
       const body = req.body;
 
-      // 검증 토큰 처리
       if (body.verification_token) {
-        console.log(">>> 검증 토큰 응답 처리 완료");
         return res.status(200).json({ verification_token: body.verification_token });
       }
 
       const { entity } = body;
       if (entity && entity.id) {
         const pageId = entity.id;
-        console.log(`>>> 페이지 조회 시작 (ID: ${pageId})`);
-        
         const page = await notion.pages.retrieve({ page_id: pageId });
         
-        // 속성값 추출 (속성 이름 '룰'이 정확한지 확인)
+        // 속성값 읽기
         const selectedRule = page.properties["룰"]?.select?.name;
-        console.log(`>>> 선택된 룰: "${selectedRule}"`);
+        
+        // '서플리먼트'가 텍스트(rich_text) 속성인 경우
+        const supplementText = page.properties["서플리먼트"]?.rich_text?.[0]?.plain_text?.trim();
 
-        const targetImageUrl = IMAGE_MAP[selectedRule];
+        let targetImageUrl = null;
+        let imageLabel = "";
 
-        if (selectedRule && targetImageUrl) {
-          console.log(`>>> 노션 페이지 업데이트 시도 (이미지: ${targetImageUrl})`);
-          
+        // 우선순위 판별: '서플리먼트' 텍스트가 있으면 서플리먼트 이미지 적용
+        if (supplementText && SUPPLEMENT_MAP[supplementText]) {
+          targetImageUrl = SUPPLEMENT_MAP[supplementText];
+          imageLabel = `${supplementText} 표지`;
+        } 
+        // 서플리먼트 매핑이 없으면 '룰' 이미지 적용
+        else if (selectedRule && RULE_MAP[selectedRule]) {
+          targetImageUrl = RULE_MAP[selectedRule];
+          imageLabel = `${selectedRule} 표지`;
+        }
+
+        // 매핑된 이미지가 존재하는 경우에만 노션 속성 업데이트
+        if (targetImageUrl) {
           await notion.pages.update({
             page_id: pageId,
             properties: {
               "사진": {
                 files: [
                   {
-                    name: `${selectedRule} 표지`,
+                    name: imageLabel,
                     type: "external",
                     external: { url: targetImageUrl }
                   }
@@ -56,17 +68,15 @@ export default async function handler(req, res) {
               }
             }
           });
-          console.log(`>>> [성공] 업데이트 완료`);
+          console.log(`[성공] 페이지 ID ${pageId} : '${imageLabel}' 적용 완료`);
         } else {
-          console.log(`>>> [스킵] 매핑된 이미지가 없거나 룰이 선택되지 않음`);
+          console.log(`[스킵] 자동 설정할 이미지가 없으므로 사용자 수동 설정을 유지합니다.`);
         }
       }
 
       return res.status(200).json({ success: true });
     } catch (error) {
-      // API 오류 시 Vercel Logs에 에러 메시지와 스택을 명확히 출력
-      console.error(">>> [API 에러 상세]:", error.message);
-      if (error.body) console.error(">>> 노션 응답 에러:", error.body);
+      console.error("[에러 발생]", error);
       return res.status(500).json({ error: error.message });
     }
   }

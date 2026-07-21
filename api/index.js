@@ -2,10 +2,8 @@ import { Client } from '@notionhq/client';
 
 const notion = new Client({ auth: process.env.NOTION_TOKEN });
 
-// '룰' 속성 값과 이미지 URL 매핑
 const IMAGE_MAP = {
   "어둠 속의 칼날": "https://image.aladin.co.kr/product/18153/52/cover200/8988060555_1.jpg"
-  // 추후 필요한 다른 룰과 이미지 URL을 여기에 계속 추가하면 돼.
 };
 
 export default async function handler(req, res) {
@@ -14,28 +12,35 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'POST') {
+    // 1. 요청 진입 로그 (웹훅 신호 도착 여부 확인)
+    console.log(">>> [웹훅 수신] POST 요청이 도착했습니다.");
+    console.log("수신 바디:", JSON.stringify(req.body, null, 2));
+
     try {
       const body = req.body;
 
-      // 1. 웹훅 등록 및 인증 처리
+      // 검증 토큰 처리
       if (body.verification_token) {
+        console.log(">>> 검증 토큰 응답 처리 완료");
         return res.status(200).json({ verification_token: body.verification_token });
       }
 
-      // 2. 이벤트 감지 및 사진 속성 자동 업데이트
       const { entity } = body;
       if (entity && entity.id) {
         const pageId = entity.id;
+        console.log(`>>> 페이지 조회 시작 (ID: ${pageId})`);
         
-        // 변경된 노션 페이지 정보 가져오기
         const page = await notion.pages.retrieve({ page_id: pageId });
         
-        // '룰' 선택 속성의 값 확인
+        // 속성값 추출 (속성 이름 '룰'이 정확한지 확인)
         const selectedRule = page.properties["룰"]?.select?.name;
+        console.log(`>>> 선택된 룰: "${selectedRule}"`);
+
         const targetImageUrl = IMAGE_MAP[selectedRule];
 
         if (selectedRule && targetImageUrl) {
-          // '사진' 속성에 외부 이미지 링크 입력
+          console.log(`>>> 노션 페이지 업데이트 시도 (이미지: ${targetImageUrl})`);
+          
           await notion.pages.update({
             page_id: pageId,
             properties: {
@@ -50,13 +55,17 @@ export default async function handler(req, res) {
               }
             }
           });
-          console.log(`[성공] 페이지 ID ${pageId} : '룰' -> '${selectedRule}' 이미지 적용 완료`);
+          console.log(`>>> [성공] 업데이트 완료`);
+        } else {
+          console.log(`>>> [스킵] 매핑된 이미지가 없거나 룰이 선택되지 않음`);
         }
       }
 
       return res.status(200).json({ success: true });
     } catch (error) {
-      console.error("[에러 발생]", error);
+      // API 오류 시 Vercel Logs에 에러 메시지와 스택을 명확히 출력
+      console.error(">>> [API 에러 상세]:", error.message);
+      if (error.body) console.error(">>> 노션 응답 에러:", error.body);
       return res.status(500).json({ error: error.message });
     }
   }

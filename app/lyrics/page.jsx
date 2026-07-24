@@ -10,7 +10,7 @@ export default function LyricCardPage() {
   const [lyricLines, setLyricLines] = useState([]);
   const [selectedIndices, setSelectedIndices] = useState([]);
 
-  // 기본 배경색 설정 (R, G, B)
+  // 자동 추출된 배경색 (RGB)
   const [bgColor, setBgColor] = useState('rgb(229, 238, 241)');
 
   const [cardData, setCardData] = useState({
@@ -38,24 +38,52 @@ export default function LyricCardPage() {
     }
   };
 
-  // 앨범 아트 이미지에서 대표 색상 추출하는 함수
+  // Canvas 기반 대표 색상 추출 함수 (CORS 우회 및 안정성 확보)
   const extractDominantColor = (imageUrl) => {
     const img = new Image();
     img.crossOrigin = 'Anonymous';
     img.src = imageUrl;
 
-    img.onload = async () => {
+    img.onload = () => {
       try {
-        const ColorThief = (await import('colorthief')).default;
-        const colorThief = new ColorThief();
-        const [r, g, b] = colorThief.getColor(img);
-        
-        // 추출한 RGB 값 적용
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = img.width;
+        canvas.height = img.height;
+
+        ctx.drawImage(img, 0, 0);
+
+        // 이미지 중앙 50x50 영역의 피셀 데이터를 가져와 평균 색상 계산
+        const imageData = ctx.getImageData(
+          Math.floor(img.width * 0.25),
+          Math.floor(img.height * 0.25),
+          Math.floor(img.width * 0.5),
+          Math.floor(img.height * 0.5)
+        );
+
+        const data = imageData.data;
+        let r = 0, g = 0, b = 0;
+        const count = data.length / 4;
+
+        for (let i = 0; i < data.length; i += 4) {
+          r += data[i];
+          g += data[i + 1];
+          b += data[i + 2];
+        }
+
+        r = Math.floor(r / count);
+        g = Math.floor(g / count);
+        b = Math.floor(b / count);
+
         setBgColor(`rgb(${r}, ${g}, ${b})`);
-      } catch (error) {
-        console.error('색상 추출 실패:', error);
-        setBgColor('rgb(229, 238, 241)'); // 실패 시 기본 색상
+      } catch (e) {
+        console.error('색상 추출 실패:', e);
+        setBgColor('rgb(229, 238, 241)');
       }
+    };
+
+    img.onerror = () => {
+      setBgColor('rgb(229, 238, 241)');
     };
   };
 
@@ -69,7 +97,7 @@ export default function LyricCardPage() {
       coverUrl: highResCover,
     });
 
-    // 앨범 이미지 색상 추출 실행
+    // 대표 색상 추출
     extractDominantColor(highResCover);
 
     setLyricLines(['가사를 불러오는 중...']);
@@ -106,15 +134,15 @@ export default function LyricCardPage() {
     });
   };
 
-  // 카드 다운로드
+  // 16:9 프레임 전체 저장
   const handleDownload = async () => {
-    const cardElement = document.getElementById('lyricCard');
-    if (!cardElement) return;
+    const frameElement = document.getElementById('exportFrame');
+    if (!frameElement) return;
 
     try {
       const html2canvas = (await import('html2canvas')).default;
-      const canvas = await html2canvas(cardElement, { useCORS: true, scale: 2 });
-      
+      const canvas = await html2canvas(frameElement, { useCORS: true, scale: 2 });
+
       const link = document.createElement('a');
       link.download = `${cardData.title}-lyric-card.png`;
       link.href = canvas.toDataURL('image/png');
@@ -195,30 +223,33 @@ export default function LyricCardPage() {
         </section>
       )}
 
-      {/* 3. 16:9 비율 가사 카드 미리보기 */}
+      {/* 3. 흰색 16:9 프레임 내부 카드 미리보기 */}
       <section style={styles.previewSection}>
-        <p style={{ fontWeight: 'bold', color: '#4a5568' }}>[ 16:9 가사 카드 미리보기 ]</p>
+        <p style={{ fontWeight: 'bold', color: '#4a5568' }}>[ 16:9 최종 이미지 미리보기 ]</p>
 
-        <div
-          id="lyricCard"
-          style={{
-            ...styles.cardContainer,
-            backgroundColor: bgColor, // 앨범 아트 추출 색상 자동 적용
-          }}
-        >
-          <div style={styles.cardHeader}>
-            <img src={cardData.coverUrl} alt="Album Cover" style={styles.cardCover} />
-            <div style={styles.cardMeta}>
-              <h3 style={styles.cardTitle}>{cardData.title}</h3>
-              <p style={styles.cardArtist}>{cardData.artist}</p>
+        {/* 16:9 비율의 흰색 아우터 프레임 */}
+        <div id="exportFrame" style={styles.outerFrame}>
+          {/* 가사 양에 따라 크기가 가변하는 카드 */}
+          <div
+            style={{
+              ...styles.innerCard,
+              backgroundColor: bgColor,
+            }}
+          >
+            <div style={styles.cardHeader}>
+              <img src={cardData.coverUrl} alt="Album Cover" style={styles.cardCover} />
+              <div style={styles.cardMeta}>
+                <h3 style={styles.cardTitle}>{cardData.title}</h3>
+                <p style={styles.cardArtist}>{cardData.artist}</p>
+              </div>
             </div>
+
+            {selectedLyricsText && (
+              <div style={styles.cardBody}>
+                <p style={styles.cardLyrics}>{selectedLyricsText}</p>
+              </div>
+            )}
           </div>
-
-          {selectedLyricsText && (
-            <div style={styles.cardBody}>
-              <p style={styles.cardLyrics}>{selectedLyricsText}</p>
-            </div>
-          )}
         </div>
 
         <button onClick={handleDownload} style={styles.downloadBtn}>
@@ -243,60 +274,73 @@ const styles = {
   lyricButton: { width: '100%', padding: '12px 16px', borderRadius: '12px', border: 'none', fontSize: '0.95rem', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s ease', lineHeight: '1.4' },
 
   previewSection: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' },
-  
-  // 16:9 비율 고정 카드 스타일 (aspectRatio: '16 / 9')
-  cardContainer: {
+
+  // 흰색 16:9 프레임 (외각)
+  outerFrame: {
     width: '100%',
     aspectRatio: '16 / 9',
-    borderRadius: '18px',
+    backgroundColor: '#ffffff',
+    borderRadius: '16px',
+    boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
     padding: '24px',
+    boxSizing: 'border-box',
+    overflow: 'hidden',
+  },
+
+  // 가사에 맞게 유연하게 조정되는 내부 카드
+  innerCard: {
+    maxWidth: '100%',
+    maxHeight: '100%',
+    borderRadius: '16px',
+    padding: '20px',
     boxSizing: 'border-box',
     display: 'flex',
     flexDirection: 'column',
-    justifyContent: 'space-between',
-    transition: 'background-color 0.4s ease', // 배경색 변경 시 부드러운 전환 효과
-    boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+    gap: '14px',
+    transition: 'background-color 0.4s ease',
+    boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
   },
   cardHeader: {
     display: 'flex',
     alignItems: 'center',
-    gap: '16px',
+    gap: '14px',
   },
   cardCover: {
-    width: '64px',
-    height: '64px',
-    borderRadius: '12px',
+    width: '56px',
+    height: '56px',
+    borderRadius: '10px',
     objectFit: 'cover',
-    boxShadow: '0 4px 10px rgba(0,0,0,0.15)',
   },
   cardMeta: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '4px',
+    gap: '2px',
   },
   cardTitle: {
     margin: 0,
-    fontSize: '1.2rem',
+    fontSize: '1.1rem',
     fontWeight: '800',
     color: '#1a202c',
   },
   cardArtist: {
     margin: 0,
-    fontSize: '0.95rem',
+    fontSize: '0.88rem',
     color: '#4a5568',
     fontWeight: '600',
   },
   cardBody: {
     backgroundColor: 'rgba(255, 255, 255, 0.75)',
     backdropFilter: 'blur(8px)',
-    padding: '16px 20px',
-    borderRadius: '14px',
-    overflow: 'hidden',
+    padding: '14px 18px',
+    borderRadius: '12px',
   },
   cardLyrics: {
     margin: 0,
-    fontSize: '1rem',
-    lineHeight: '1.6',
+    fontSize: '0.92rem',
+    lineHeight: '1.5',
     color: '#1a202c',
     whiteSpace: 'pre-wrap',
     fontWeight: '600',

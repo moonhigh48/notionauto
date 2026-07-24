@@ -186,61 +186,67 @@ export default function LyricCardPage() {
     });
   };
 
-  // 16:9 맞춤 비율 동적 연산 후 투명 PNG 다운로드
+  // 16:9 맞춤 비율 동적 연산 후 투명 PNG 다운로드 (폰트 유실 방지 로직 포함)
   const handleDownload = async () => {
     const cardEl = innerCardRef.current;
     if (!cardEl) return;
 
     try {
+      // 1. 웹폰트가 로드될 때까지 기다림
+      if (document.fonts) {
+        await document.fonts.ready;
+      }
+
       const html2canvas = (await import('html2canvas')).default;
 
-      // 1. 카드 실제 크기 측정
+      // 2. 카드 크기 측정
       const rect = cardEl.getBoundingClientRect();
       const currentWidth = rect.width;
       const currentHeight = rect.height;
 
-      // 2. 16:9 비율 판단 및 외곽 프레임 크기 동적 결정
+      // 3. 16:9 비율 판단 및 외곽 크기 계산
       const targetRatio = 16 / 9;
       const currentRatio = currentWidth / currentHeight;
 
       let frameWidth, frameHeight;
 
       if (currentRatio > targetRatio) {
-        // 가로가 상대적으로 긴 경우 -> 가로 기준 세로 여백 확장
         frameWidth = currentWidth;
         frameHeight = currentWidth / targetRatio;
       } else {
-        // 세로가 상대적으로 긴 경우 -> 세로 기준 가로 여백 확장
         frameHeight = currentHeight;
         frameWidth = currentHeight * targetRatio;
       }
 
-      // 3. 투명 16:9 캔버스 생성 및 카드 배치
+      // 4. 임시 캡처 컨테이너 생성
       const wrapper = document.createElement('div');
       wrapper.style.position = 'fixed';
       wrapper.style.top = '-9999px';
       wrapper.style.left = '-9999px';
       wrapper.style.width = `${frameWidth}px`;
       wrapper.style.height = `${frameHeight}px`;
-      wrapper.style.backgroundColor = 'transparent'; // 투명 배경
+      wrapper.style.backgroundColor = 'transparent';
       wrapper.style.display = 'flex';
       wrapper.style.alignItems = 'center';
       wrapper.style.justifyContent = 'center';
+
+      // 폰트 스타일 직접 지정
+      wrapper.style.fontFamily = `${poppins.style.fontFamily}, sans-serif`;
 
       const clonedCard = cardEl.cloneNode(true);
       wrapper.appendChild(clonedCard);
       document.body.appendChild(wrapper);
 
-      // 4. 투명 PNG 캡처
+      // 5. 캡처
       const canvas = await html2canvas(wrapper, {
-        backgroundColor: null, // 투명 배경 캡처 설정
+        backgroundColor: null,
         useCORS: true,
         scale: 2,
       });
 
       document.body.removeChild(wrapper);
 
-      // 5. 이미지 파일 저장
+      // 6. 이미지 다운로드
       const link = document.createElement('a');
       link.download = `${cardData.title}-lyric-card.png`;
       link.href = canvas.toDataURL('image/png');
@@ -325,13 +331,13 @@ export default function LyricCardPage() {
       <section style={styles.previewSection}>
         <p style={{ fontWeight: 'bold', color: '#4a5568' }}>[ 가사 카드 미리보기 ]</p>
 
-        {/* 투명 배경 위 카드 미리보기 */}
         <div style={styles.transparentCheckerboard}>
           <div
             ref={innerCardRef}
             style={{
               ...styles.innerCard,
               backgroundColor: bgColor,
+              fontFamily: `${poppins.style.fontFamily}, sans-serif`,
             }}
           >
             <div style={styles.cardHeader}>
@@ -373,7 +379,6 @@ const styles = {
 
   previewSection: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', width: '100%' },
 
-  // 미리보기 투명 격자 배경
   transparentCheckerboard: {
     width: '100%',
     padding: '24px 16px',
@@ -393,7 +398,6 @@ const styles = {
     boxSizing: 'border-box',
   },
 
-  // 카드 본체
   innerCard: {
     width: '100%',
     maxWidth: '420px',

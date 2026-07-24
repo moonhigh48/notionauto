@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 
 export default function LyricCardPage() {
   const [query, setQuery] = useState('');
@@ -10,14 +10,16 @@ export default function LyricCardPage() {
   const [lyricLines, setLyricLines] = useState([]);
   const [selectedIndices, setSelectedIndices] = useState([]);
 
-  // 자동 추출된 배경색 (RGB)
-  const [bgColor, setBgColor] = useState('rgb(229, 238, 241)');
+  // 자동 추출 배경색 (파스텔톤)
+  const [bgColor, setBgColor] = useState('hsl(200, 40%, 86%)');
 
   const [cardData, setCardData] = useState({
     title: 'Walk Thru Fire',
     artist: 'Vicetone',
     coverUrl: 'https://via.placeholder.com/300?text=Album+Art',
   });
+
+  const innerCardRef = useRef(null);
 
   // iTunes API 검색
   const handleSearch = async () => {
@@ -38,8 +40,8 @@ export default function LyricCardPage() {
     }
   };
 
-// Canvas 기반 대표 색상 추출 및 파스텔톤 변환
-const convertToPastelRgb = (r, g, b) => {
+  // 파스텔톤 색상 보정 알고리즘
+  const convertToPastelRgb = (r, g, b) => {
     r /= 255;
     g /= 255;
     b /= 255;
@@ -69,25 +71,21 @@ const convertToPastelRgb = (r, g, b) => {
     }
 
     const hueDegree = Math.round(h * 360);
-    
-    // 채도(S): 35~50% 사이로 보정하여 은은함 유지
     const pastelSaturation = Math.min(Math.max(Math.round(s * 100), 35), 50);
 
-    // 명도(L): 원본 명도(l)에 따라 유연하게 결정
     let pastelLightness;
     const origLightness = Math.round(l * 100);
 
     if (origLightness < 60) {
-      // 진하거나 어두운 색상 -> 연한 파스텔톤으로 끌어올림 (85%~88%)
-      pastelLightness = 86;
+      pastelLightness = 86; // 어두운 색상은 은은하게 끌어올림
     } else {
-      // 이미 연하거나 밝은 색상 -> 색감이 날아가지 않게 원본 명도를 적절히 반영 (80%~88% 사이 고정)
-      pastelLightness = Math.min(Math.max(origLightness, 80), 88);
+      pastelLightness = Math.min(Math.max(origLightness, 80), 88); // 연한 색상은 날아가지 않게 유지
     }
 
     return `hsl(${hueDegree}, ${pastelSaturation}%, ${pastelLightness}%)`;
   };
-  
+
+  // 대표 색상 추출
   const extractDominantColor = (imageUrl) => {
     const img = new Image();
     img.crossOrigin = 'Anonymous';
@@ -123,20 +121,18 @@ const convertToPastelRgb = (r, g, b) => {
         g = Math.floor(g / count);
         b = Math.floor(b / count);
 
-        // 추출한 원본 RGB를 파스텔톤 HSL로 변환해 저장
-        const pastelColor = convertToPastelRgb(r, g, b);
-        setBgColor(pastelColor);
+        setBgColor(convertToPastelRgb(r, g, b));
       } catch (e) {
-        console.error('색상 추출 실패:', e);
-        setBgColor('hsl(200, 45%, 90%)'); // 기본 파스텔톤
+        setBgColor('hsl(200, 40%, 86%)');
       }
     };
 
     img.onerror = () => {
-      setBgColor('hsl(200, 45%, 90%)');
+      setBgColor('hsl(200, 40%, 86%)');
     };
   };
-  // 곡 선택 시
+
+  // 트랙 선택
   const handleSelectTrack = async (track) => {
     const highResCover = track.artworkUrl100.replace('100x100bb', '600x600bb');
 
@@ -146,7 +142,6 @@ const convertToPastelRgb = (r, g, b) => {
       coverUrl: highResCover,
     });
 
-    // 대표 색상 추출
     extractDominantColor(highResCover);
 
     setLyricLines(['가사를 불러오는 중...']);
@@ -183,15 +178,61 @@ const convertToPastelRgb = (r, g, b) => {
     });
   };
 
-  // 16:9 프레임 전체 저장
+  // 16:9 맞춤 비율 동적 연산 후 투명 PNG 다운로드
   const handleDownload = async () => {
-    const frameElement = document.getElementById('exportFrame');
-    if (!frameElement) return;
+    const cardEl = innerCardRef.current;
+    if (!cardEl) return;
 
     try {
       const html2canvas = (await import('html2canvas')).default;
-      const canvas = await html2canvas(frameElement, { useCORS: true, scale: 2 });
 
+      // 1. 카드 실제 크기 측정
+      const rect = cardEl.getBoundingClientRect();
+      const currentWidth = rect.width;
+      const currentHeight = rect.height;
+
+      // 2. 16:9 비율 판단 및 외곽 프레임 크기 동적 결정
+      const targetRatio = 16 / 9;
+      const currentRatio = currentWidth / currentHeight;
+
+      let frameWidth, frameHeight;
+
+      if (currentRatio > targetRatio) {
+        // 가로가 상대적으로 긴 경우 -> 가로 기준 세로 여백 확장
+        frameWidth = currentWidth;
+        frameHeight = currentWidth / targetRatio;
+      } else {
+        // 세로가 상대적으로 긴 경우 -> 세로 기준 가로 여백 확장
+        frameHeight = currentHeight;
+        frameWidth = currentHeight * targetRatio;
+      }
+
+      // 3. 투명 16:9 캔버스 생성 및 카드 배치
+      const wrapper = document.createElement('div');
+      wrapper.style.position = 'fixed';
+      wrapper.style.top = '-9999px';
+      wrapper.style.left = '-9999px';
+      wrapper.style.width = `${frameWidth}px`;
+      wrapper.style.height = `${frameHeight}px`;
+      wrapper.style.backgroundColor = 'transparent'; // 투명 배경
+      wrapper.style.display = 'flex';
+      wrapper.style.alignItems = 'center';
+      wrapper.style.justifyContent = 'center';
+
+      const clonedCard = cardEl.cloneNode(true);
+      wrapper.appendChild(clonedCard);
+      document.body.appendChild(wrapper);
+
+      // 4. 투명 PNG 캡처
+      const canvas = await html2canvas(wrapper, {
+        backgroundColor: null, // 투명 배경 캡처 설정
+        useCORS: true,
+        scale: 2,
+      });
+
+      document.body.removeChild(wrapper);
+
+      // 5. 이미지 파일 저장
       const link = document.createElement('a');
       link.download = `${cardData.title}-lyric-card.png`;
       link.href = canvas.toDataURL('image/png');
@@ -272,14 +313,14 @@ const convertToPastelRgb = (r, g, b) => {
         </section>
       )}
 
-      {/* 3. 흰색 16:9 프레임 내부 카드 미리보기 */}
+      {/* 3. 카드 미리보기 영역 */}
       <section style={styles.previewSection}>
-        <p style={{ fontWeight: 'bold', color: '#4a5568' }}>[ 16:9 최종 이미지 미리보기 ]</p>
+        <p style={{ fontWeight: 'bold', color: '#4a5568' }}>[ 가사 카드 미리보기 ]</p>
 
-        {/* 16:9 비율의 흰색 아우터 프레임 */}
-        <div id="exportFrame" style={styles.outerFrame}>
-          {/* 가사 양에 따라 크기가 가변하는 카드 */}
+        {/* 투명 배경 위 카드 미리보기 */}
+        <div style={styles.transparentCheckerboard}>
           <div
+            ref={innerCardRef}
             style={{
               ...styles.innerCard,
               backgroundColor: bgColor,
@@ -302,7 +343,7 @@ const convertToPastelRgb = (r, g, b) => {
         </div>
 
         <button onClick={handleDownload} style={styles.downloadBtn}>
-          카드 이미지 다운로드
+          16:9 투명 이미지 다운로드
         </button>
       </section>
     </div>
@@ -310,7 +351,7 @@ const convertToPastelRgb = (r, g, b) => {
 }
 
 const styles = {
-  container: { maxWidth: '640px', margin: '30px auto', padding: '0 16px', display: 'flex', flexDirection: 'column', gap: '20px' },
+  container: { maxWidth: '520px', margin: '30px auto', padding: '0 16px', display: 'flex', flexDirection: 'column', gap: '20px' },
   section: { background: '#fff', padding: '16px', borderRadius: '16px', boxShadow: '0 2px 10px rgba(0,0,0,0.05)' },
   inputGroup: { display: 'flex', gap: '8px' },
   input: { flex: 1, padding: '12px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '0.95rem', outline: 'none' },
@@ -322,27 +363,32 @@ const styles = {
   lyricsGroup: { display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '280px', overflowY: 'auto', paddingRight: '4px' },
   lyricButton: { width: '100%', padding: '12px 16px', borderRadius: '12px', border: 'none', fontSize: '0.95rem', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s ease', lineHeight: '1.4' },
 
-  previewSection: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px' },
+  previewSection: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '16px', width: '100%' },
 
-  // 흰색 16:9 프레임 (외각)
-  outerFrame: {
+  // 미리보기 투명 격자 배경
+  transparentCheckerboard: {
     width: '100%',
-    aspectRatio: '16 / 9',
-    backgroundColor: '#ffffff',
+    padding: '24px 16px',
     borderRadius: '16px',
-    boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
     display: 'flex',
-    alignItems: 'center',
     justifyContent: 'center',
-    padding: '24px',
+    alignItems: 'center',
+    backgroundColor: '#f0f0f0',
+    backgroundImage: `
+      linear-gradient(45deg, #e0e0e0 25%, transparent 25%),
+      linear-gradient(-45deg, #e0e0e0 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #e0e0e0 75%),
+      linear-gradient(-45deg, transparent 75%, #e0e0e0 75%)
+    `,
+    backgroundSize: '16px 16px',
+    backgroundPosition: '0 0, 0 8px, 8px -8px, -8px 0px',
     boxSizing: 'border-box',
-    overflow: 'hidden',
   },
 
-  // 가사에 맞게 유연하게 조정되는 내부 카드
+  // 카드 본체
   innerCard: {
-    maxWidth: '100%',
-    maxHeight: '100%',
+    width: '100%',
+    maxWidth: '420px',
     borderRadius: '16px',
     padding: '20px',
     boxSizing: 'border-box',
@@ -350,7 +396,7 @@ const styles = {
     flexDirection: 'column',
     gap: '14px',
     transition: 'background-color 0.4s ease',
-    boxShadow: '0 4px 16px rgba(0,0,0,0.08)',
+    boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
   },
   cardHeader: {
     display: 'flex',

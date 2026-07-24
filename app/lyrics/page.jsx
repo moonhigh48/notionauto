@@ -1,6 +1,14 @@
 'use client';
 
 import React, { useState, useRef } from 'react';
+import { Poppins } from 'next/font/google';
+
+// Poppins 폰트 설정
+const poppins = Poppins({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700', '800'],
+  display: 'swap',
+});
 
 export default function LyricCardPage() {
   const [query, setQuery] = useState('');
@@ -247,7 +255,7 @@ export default function LyricCardPage() {
     .join('\n');
 
   return (
-    <div style={styles.container}>
+    <div className={poppins.className} style={styles.container}>
       <h1 style={{ textAlign: 'center', marginBottom: '20px' }}>🎵 Lyric Card Generator</h1>
 
       {/* 1. 검색 영역 */}

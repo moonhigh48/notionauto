@@ -38,7 +38,56 @@ export default function LyricCardPage() {
     }
   };
 
-  // Canvas 기반 대표 색상 추출 함수 (CORS 우회 및 안정성 확보)
+// Canvas 기반 대표 색상 추출 및 파스텔톤 변환
+const convertToPastelRgb = (r, g, b) => {
+    r /= 255;
+    g /= 255;
+    b /= 255;
+
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    let h = 0;
+    let s = 0;
+    const l = (max + min) / 2;
+
+    if (max !== min) {
+      const d = max - min;
+      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+
+      switch (max) {
+        case r:
+          h = (g - b) / d + (g < b ? 6 : 0);
+          break;
+        case g:
+          h = (b - r) / d + 2;
+          break;
+        case b:
+          h = (r - g) / d + 4;
+          break;
+      }
+      h /= 6;
+    }
+
+    const hueDegree = Math.round(h * 360);
+    
+    // 채도(S): 35~50% 사이로 보정하여 은은함 유지
+    const pastelSaturation = Math.min(Math.max(Math.round(s * 100), 35), 50);
+
+    // 명도(L): 원본 명도(l)에 따라 유연하게 결정
+    let pastelLightness;
+    const origLightness = Math.round(l * 100);
+
+    if (origLightness < 60) {
+      // 진하거나 어두운 색상 -> 연한 파스텔톤으로 끌어올림 (85%~88%)
+      pastelLightness = 86;
+    } else {
+      // 이미 연하거나 밝은 색상 -> 색감이 날아가지 않게 원본 명도를 적절히 반영 (80%~88% 사이 고정)
+      pastelLightness = Math.min(Math.max(origLightness, 80), 88);
+    }
+
+    return `hsl(${hueDegree}, ${pastelSaturation}%, ${pastelLightness}%)`;
+  };
+  
   const extractDominantColor = (imageUrl) => {
     const img = new Image();
     img.crossOrigin = 'Anonymous';
@@ -53,7 +102,6 @@ export default function LyricCardPage() {
 
         ctx.drawImage(img, 0, 0);
 
-        // 이미지 중앙 50x50 영역의 피셀 데이터를 가져와 평균 색상 계산
         const imageData = ctx.getImageData(
           Math.floor(img.width * 0.25),
           Math.floor(img.height * 0.25),
@@ -75,18 +123,19 @@ export default function LyricCardPage() {
         g = Math.floor(g / count);
         b = Math.floor(b / count);
 
-        setBgColor(`rgb(${r}, ${g}, ${b})`);
+        // 추출한 원본 RGB를 파스텔톤 HSL로 변환해 저장
+        const pastelColor = convertToPastelRgb(r, g, b);
+        setBgColor(pastelColor);
       } catch (e) {
         console.error('색상 추출 실패:', e);
-        setBgColor('rgb(229, 238, 241)');
+        setBgColor('hsl(200, 45%, 90%)'); // 기본 파스텔톤
       }
     };
 
     img.onerror = () => {
-      setBgColor('rgb(229, 238, 241)');
+      setBgColor('hsl(200, 45%, 90%)');
     };
   };
-
   // 곡 선택 시
   const handleSelectTrack = async (track) => {
     const highResCover = track.artworkUrl100.replace('100x100bb', '600x600bb');

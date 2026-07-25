@@ -1,10 +1,22 @@
 'use client';
 
 import React, { useState, useRef } from 'react';
-import { Poppins } from 'next/font/google';
+import { Poppins, Montserrat, Inter } from 'next/font/google';
 
-// Poppins 폰트 설정
+// 구글 폰트 설정
 const poppins = Poppins({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700', '800'],
+  display: 'swap',
+});
+
+const montserrat = Montserrat({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700', '800'],
+  display: 'swap',
+});
+
+const inter = Inter({
   subsets: ['latin'],
   weight: ['400', '500', '600', '700', '800'],
   display: 'swap',
@@ -21,6 +33,10 @@ export default function LyricCardPage() {
   // 자동 추출 배경색 (파스텔톤)
   const [bgColor, setBgColor] = useState('hsl(200, 40%, 86%)');
 
+  // 폰트 관련 상태 ('poppins', 'montserrat', 'inter', 'system', 'custom')
+  const [selectedFont, setSelectedFont] = useState('poppins');
+  const [customFontName, setCustomFontName] = useState('');
+
   const [cardData, setCardData] = useState({
     title: 'Walk Thru Fire',
     artist: 'Vicetone',
@@ -28,6 +44,44 @@ export default function LyricCardPage() {
   });
 
   const innerCardRef = useRef(null);
+
+  // 사용자 지정 폰트 파일 업로드 처리
+  const handleCustomFontUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const fontName = `CustomFont_${Date.now()}`;
+    const fontUrl = URL.createObjectURL(file);
+
+    const newFontFace = new FontFace(fontName, `url(${fontUrl})`);
+    newFontFace
+      .load()
+      .then((loadedFace) => {
+        document.fonts.add(loadedFace);
+        setCustomFontName(fontName);
+        setSelectedFont('custom');
+      })
+      .catch((err) => {
+        alert('폰트 파일을 불러오는 데 실패했습니다.');
+      });
+  };
+
+  // 현재 선택된 폰트의 fontFamily 값 가져오기
+  const getCurrentFontFamily = () => {
+    switch (selectedFont) {
+      case 'poppins':
+        return `${poppins.style.fontFamily}, sans-serif`;
+      case 'montserrat':
+        return `${montserrat.style.fontFamily}, sans-serif`;
+      case 'inter':
+        return `${inter.style.fontFamily}, sans-serif`;
+      case 'custom':
+        return customFontName ? `"${customFontName}", sans-serif` : 'sans-serif';
+      case 'system':
+      default:
+        return '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
+    }
+  };
 
   // iTunes API 검색
   const handleSearch = async () => {
@@ -85,9 +139,9 @@ export default function LyricCardPage() {
     const origLightness = Math.round(l * 100);
 
     if (origLightness < 60) {
-      pastelLightness = 86; // 어두운 색상은 은은하게 끌어올림
+      pastelLightness = 86;
     } else {
-      pastelLightness = Math.min(Math.max(origLightness, 80), 88); // 연한 색상은 날아가지 않게 유지
+      pastelLightness = Math.min(Math.max(origLightness, 80), 88);
     }
 
     return `hsl(${hueDegree}, ${pastelSaturation}%, ${pastelLightness}%)`;
@@ -186,25 +240,22 @@ export default function LyricCardPage() {
     });
   };
 
-  // 16:9 맞춤 비율 동적 연산 후 투명 PNG 다운로드 (폰트 유실 방지 로직 포함)
+  // 16:9 맞춤 비율 동적 연산 후 투명 PNG 다운로드
   const handleDownload = async () => {
     const cardEl = innerCardRef.current;
     if (!cardEl) return;
 
     try {
-      // 1. 웹폰트가 로드될 때까지 기다림
       if (document.fonts) {
         await document.fonts.ready;
       }
 
       const html2canvas = (await import('html2canvas')).default;
 
-      // 2. 카드 크기 측정
       const rect = cardEl.getBoundingClientRect();
       const currentWidth = rect.width;
       const currentHeight = rect.height;
 
-      // 3. 16:9 비율 판단 및 외곽 크기 계산
       const targetRatio = 16 / 9;
       const currentRatio = currentWidth / currentHeight;
 
@@ -218,7 +269,6 @@ export default function LyricCardPage() {
         frameWidth = currentHeight * targetRatio;
       }
 
-      // 4. 임시 캡처 컨테이너 생성
       const wrapper = document.createElement('div');
       wrapper.style.position = 'fixed';
       wrapper.style.top = '-9999px';
@@ -230,14 +280,13 @@ export default function LyricCardPage() {
       wrapper.style.alignItems = 'center';
       wrapper.style.justifyContent = 'center';
 
-      // 폰트 스타일 직접 지정
-      wrapper.style.fontFamily = `${poppins.style.fontFamily}, sans-serif`;
+      // 선택된 폰트 패밀리 지정
+      wrapper.style.fontFamily = getCurrentFontFamily();
 
       const clonedCard = cardEl.cloneNode(true);
       wrapper.appendChild(clonedCard);
       document.body.appendChild(wrapper);
 
-      // 5. 캡처
       const canvas = await html2canvas(wrapper, {
         backgroundColor: null,
         useCORS: true,
@@ -246,7 +295,6 @@ export default function LyricCardPage() {
 
       document.body.removeChild(wrapper);
 
-      // 6. 이미지 다운로드
       const link = document.createElement('a');
       link.download = `${cardData.title}-lyric-card.png`;
       link.href = canvas.toDataURL('image/png');
@@ -261,7 +309,7 @@ export default function LyricCardPage() {
     .join('\n');
 
   return (
-    <div className={poppins.className} style={styles.container}>
+    <div style={styles.container}>
       <h1 style={{ textAlign: 'center', marginBottom: '20px' }}>🎵 Lyric Card Generator</h1>
 
       {/* 1. 검색 영역 */}
@@ -299,7 +347,37 @@ export default function LyricCardPage() {
         )}
       </section>
 
-      {/* 2. 가사 선택 영역 */}
+      {/* 2. 폰트 선택 옵션 영역 */}
+      <section style={styles.section}>
+        <p style={{ fontSize: '0.9rem', fontWeight: 'bold', color: '#4a5568', marginBottom: '10px' }}>
+          🔤 폰트 선택
+        </p>
+        <div style={styles.fontOptionGroup}>
+          <select
+            value={selectedFont}
+            onChange={(e) => setSelectedFont(e.target.value)}
+            style={styles.selectInput}
+          >
+            <option value="poppins">Poppins (추천)</option>
+            <option value="montserrat">Montserrat</option>
+            <option value="inter">Inter</option>
+            <option value="system">기본 시스템 폰트</option>
+            {customFontName && <option value="custom">사용자 지정 폰트</option>}
+          </select>
+
+          <label style={styles.fileUploadLabel}>
+            폰트 파일 업로드 (.ttf, .otf, .woff)
+            <input
+              type="file"
+              accept=".ttf,.otf,.woff,.woff2"
+              onChange={handleCustomFontUpload}
+              style={{ display: 'none' }}
+            />
+          </label>
+        </div>
+      </section>
+
+      {/* 3. 가사 선택 영역 */}
       {lyricLines.length > 0 && (
         <section style={styles.section}>
           <p style={{ fontSize: '0.9rem', color: '#666', marginBottom: '12px' }}>
@@ -317,6 +395,7 @@ export default function LyricCardPage() {
                     backgroundColor: isSelected ? '#3182ce' : '#e5eef1',
                     color: isSelected ? '#ffffff' : '#1a202c',
                     fontWeight: isSelected ? '700' : '500',
+                    fontFamily: getCurrentFontFamily(),
                   }}
                 >
                   {line}
@@ -327,7 +406,7 @@ export default function LyricCardPage() {
         </section>
       )}
 
-      {/* 3. 카드 미리보기 영역 */}
+      {/* 4. 카드 미리보기 영역 */}
       <section style={styles.previewSection}>
         <p style={{ fontWeight: 'bold', color: '#4a5568' }}>[ 가사 카드 미리보기 ]</p>
 
@@ -337,7 +416,7 @@ export default function LyricCardPage() {
             style={{
               ...styles.innerCard,
               backgroundColor: bgColor,
-              fontFamily: `${poppins.style.fontFamily}, sans-serif`,
+              fontFamily: getCurrentFontFamily(),
             }}
           >
             <div style={styles.cardHeader}>
@@ -373,6 +452,10 @@ const styles = {
   resultsList: { display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px', maxHeight: '180px', overflowY: 'auto' },
   resultItem: { display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 12px', background: '#f7fafc', borderRadius: '10px', cursor: 'pointer' },
   thumb: { width: '40px', height: '40px', borderRadius: '6px' },
+
+  fontOptionGroup: { display: 'flex', flexDirection: 'column', gap: '8px' },
+  selectInput: { width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '0.9rem', outline: 'none', cursor: 'pointer' },
+  fileUploadLabel: { display: 'inline-block', padding: '10px 12px', background: '#edf2f7', color: '#4a5568', borderRadius: '10px', fontSize: '0.85rem', fontWeight: '600', textAlign: 'center', cursor: 'pointer', border: '1px dashed #cbd5e0' },
 
   lyricsGroup: { display: 'flex', flexDirection: 'column', gap: '10px', maxHeight: '280px', overflowY: 'auto', paddingRight: '4px' },
   lyricButton: { width: '100%', padding: '12px 16px', borderRadius: '12px', border: 'none', fontSize: '0.95rem', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s ease', lineHeight: '1.4' },

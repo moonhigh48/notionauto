@@ -27,8 +27,12 @@ export async function POST(req) {
 
     // 웹훅 검증 토큰 응답
     if (body.verification_token) {
+      console.log("[노션 웹훅 인증 요청 수신!]:", body.verification_token);
       return Response.json({ verification_token: body.verification_token });
     }
+    console.log("[웹훅 수신 성공]:", JSON.stringify(body, null, 2));
+
+    
 
     const { entity } = body;
 

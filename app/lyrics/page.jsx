@@ -38,8 +38,8 @@ export default function LyricCardPage() {
   const [customFontName, setCustomFontName] = useState('');
 
   const [cardData, setCardData] = useState({
-    title: 'Walk Thru Fire',
-    artist: 'Vicetone',
+    title: 'Song Title',
+    artist: 'Artist',
     coverUrl: 'https://via.placeholder.com/300?text=Album+Art',
   });
 

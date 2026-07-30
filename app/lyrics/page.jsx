@@ -33,7 +33,7 @@ export default function LyricCardPage() {
   // 자동 추출 배경색 (파스텔톤)
   const [bgColor, setBgColor] = useState('hsl(200, 40%, 86%)');
 
-  // 폰트 관련 상태 ('poppins', 'montserrat', 'inter', 'system', 'custom')
+  // 폰트 관련 상태
   const [selectedFont, setSelectedFont] = useState('poppins');
   const [customFontName, setCustomFontName] = useState('');
 
@@ -61,7 +61,7 @@ export default function LyricCardPage() {
         setCustomFontName(fontName);
         setSelectedFont('custom');
       })
-      .catch((err) => {
+      .catch(() => {
         alert('폰트 파일을 불러오는 데 실패했습니다.');
       });
   };
@@ -83,18 +83,78 @@ export default function LyricCardPage() {
     }
   };
 
-  // iTunes API 검색
+  // 텍스트 정규화 (중복 판별용)
+  const normalizeText = (text) => text.toLowerCase().replace(/[^a-z0-9가-힣]/g, '');
+
+  // 가사 보유 여부 미리 체크
+  const checkLyricsAvailability = async (artist, title) => {
+    try {
+      const res = await fetch(`https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(title)}`);
+      const data = await res.json();
+      if (data.lyrics) {
+        const lines = data.lyrics
+          .split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0);
+        return { hasLyrics: true, lines };
+      }
+    } catch (e) {
+      // 오류 발생 시 가사 없음으로 간주
+    }
+    return { hasLyrics: false, lines: [] };
+  };
+
+  // 통합 검색 및 중복 제거 + 가사 유무 최우선 반영
   const handleSearch = async () => {
     if (!query.trim()) return alert('노래 제목이나 가수를 입력해주세요.');
     setLoading(true);
+    setResults([]);
 
     try {
-      const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=5`);
+      // 1. iTunes API 검색
+      const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=10`);
       const data = await res.json();
 
-      if (data.results) {
-        setResults(data.results);
+      if (!data.results || data.results.length === 0) {
+        alert('검색 결과가 없습니다.');
+        setLoading(false);
+        return;
       }
+
+      // 2. 검색 결과 전체에 대해 가사 유무 미리 병렬 확인
+      const trackPromises = data.results.map(async (track) => {
+        const lyricInfo = await checkLyricsAvailability(track.artistName, track.trackName);
+        return {
+          id: track.trackId,
+          title: track.trackName,
+          artist: track.artistName,
+          coverUrl: track.artworkUrl100.replace('100x100bb', '600x600bb'),
+          hasLyrics: lyricInfo.hasLyrics,
+          lyricsLines: lyricInfo.lines,
+        };
+      });
+
+      const processedTracks = await Promise.all(trackPromises);
+
+      // 3. 중복 제거 및 '가사 있는 곡' 우선 필터링
+      const uniqueTracksMap = new Map();
+
+      processedTracks.forEach((track) => {
+        const key = `${normalizeText(track.title)}_${normalizeText(track.artist)}`;
+
+        if (!uniqueTracksMap.has(key)) {
+          uniqueTracksMap.set(key, track);
+        } else {
+          const existingTrack = uniqueTracksMap.get(key);
+          // 기존 항목은 가사가 없고 새 항목이 가사가 있으면 새로 대체
+          if (!existingTrack.hasLyrics && track.hasLyrics) {
+            uniqueTracksMap.set(key, track);
+          }
+        }
+      });
+
+      const finalResults = Array.from(uniqueTracksMap.values());
+      setResults(finalResults);
     } catch (err) {
       alert('검색 중 오류가 발생했습니다.');
     } finally {
@@ -102,7 +162,7 @@ export default function LyricCardPage() {
     }
   };
 
-  // 파스텔톤 색상 보정 알고리즘
+  // 파스텔톤 색상 보정
   const convertToPastelRgb = (r, g, b) => {
     r /= 255;
     g /= 255;
@@ -195,37 +255,21 @@ export default function LyricCardPage() {
   };
 
   // 트랙 선택
-  const handleSelectTrack = async (track) => {
-    const highResCover = track.artworkUrl100.replace('100x100bb', '600x600bb');
-
+  const handleSelectTrack = (track) => {
     setCardData({
-      title: track.trackName,
-      artist: track.artistName,
-      coverUrl: highResCover,
+      title: track.title,
+      artist: track.artist,
+      coverUrl: track.coverUrl,
     });
 
-    extractDominantColor(highResCover);
+    extractDominantColor(track.coverUrl);
 
-    setLyricLines(['가사를 불러오는 중...']);
-    setSelectedIndices([]);
-
-    try {
-      const res = await fetch(`https://api.lyrics.ovh/v1/${encodeURIComponent(track.artistName)}/${encodeURIComponent(track.trackName)}`);
-      const data = await res.json();
-
-      if (data.lyrics) {
-        const lines = data.lyrics
-          .split('\n')
-          .map((line) => line.trim())
-          .filter((line) => line.length > 0);
-
-        setLyricLines(lines);
-        setSelectedIndices([0, 1].filter((i) => i < lines.length));
-      } else {
-        setLyricLines(['가사를 찾지 못했습니다.']);
-      }
-    } catch (e) {
-      setLyricLines(['가사를 불러오지 못했습니다.']);
+    if (track.hasLyrics && track.lyricsLines.length > 0) {
+      setLyricLines(track.lyricsLines);
+      setSelectedIndices([0, 1].filter((i) => i < track.lyricsLines.length));
+    } else {
+      setLyricLines(['등록된 가사가 없습니다.']);
+      setSelectedIndices([]);
     }
   };
 
@@ -240,7 +284,7 @@ export default function LyricCardPage() {
     });
   };
 
-  // 16:9 맞춤 비율 동적 연산 후 투명 PNG 다운로드
+  // 이미지 다운로드
   const handleDownload = async () => {
     const cardEl = innerCardRef.current;
     if (!cardEl) return;
@@ -279,8 +323,6 @@ export default function LyricCardPage() {
       wrapper.style.display = 'flex';
       wrapper.style.alignItems = 'center';
       wrapper.style.justifyContent = 'center';
-
-      // 선택된 폰트 패밀리 지정
       wrapper.style.fontFamily = getCurrentFontFamily();
 
       const clonedCard = cardEl.cloneNode(true);
@@ -332,14 +374,19 @@ export default function LyricCardPage() {
           <div style={styles.resultsList}>
             {results.map((track) => (
               <div
-                key={track.trackId}
+                key={track.id}
                 onClick={() => handleSelectTrack(track)}
                 style={styles.resultItem}
               >
-                <img src={track.artworkUrl100} alt={track.trackName} style={styles.thumb} />
-                <div>
-                  <strong style={{ fontSize: '0.95rem' }}>{track.trackName}</strong>
-                  <p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>{track.artistName}</p>
+                <img src={track.coverUrl} alt={track.title} style={styles.thumb} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <strong style={{ fontSize: '0.95rem' }}>{track.title}</strong>
+                    {track.hasLyrics && (
+                      <span style={styles.lyricsBadge}>가사 있음</span>
+                    )}
+                  </div>
+                  <p style={{ margin: 0, fontSize: '0.85rem', color: '#666' }}>{track.artist}</p>
                 </div>
               </div>
             ))}
@@ -358,7 +405,7 @@ export default function LyricCardPage() {
             onChange={(e) => setSelectedFont(e.target.value)}
             style={styles.selectInput}
           >
-            <option value="poppins">Poppins (추천)</option>
+            <option value="poppins">Poppins (기본)</option>
             <option value="montserrat">Montserrat</option>
             <option value="inter">Inter</option>
             <option value="system">기본 시스템 폰트</option>
@@ -449,9 +496,10 @@ const styles = {
   inputGroup: { display: 'flex', gap: '8px' },
   input: { flex: 1, padding: '12px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '0.95rem', outline: 'none' },
   searchButton: { padding: '12px 18px', background: '#3182ce', color: '#fff', border: 'none', borderRadius: '10px', cursor: 'pointer', fontWeight: 'bold' },
-  resultsList: { display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px', maxHeight: '180px', overflowY: 'auto' },
+  resultsList: { display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px', maxHeight: '220px', overflowY: 'auto' },
   resultItem: { display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 12px', background: '#f7fafc', borderRadius: '10px', cursor: 'pointer' },
-  thumb: { width: '40px', height: '40px', borderRadius: '6px' },
+  thumb: { width: '44px', height: '44px', borderRadius: '6px', objectFit: 'cover' },
+  lyricsBadge: { fontSize: '0.7rem', padding: '2px 6px', background: '#e2e8f0', color: '#2d3748', borderRadius: '4px', fontWeight: '600' },
 
   fontOptionGroup: { display: 'flex', flexDirection: 'column', gap: '8px' },
   selectInput: { width: '100%', padding: '10px 12px', borderRadius: '10px', border: '1px solid #e2e8f0', fontSize: '0.9rem', outline: 'none', cursor: 'pointer' },

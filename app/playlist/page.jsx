@@ -28,6 +28,10 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 
 const STORAGE_KEY = "tracklist_yt_api_key";
+const SEARCH_CACHE_KEY = "tracklist_search_cache";
+const SEARCH_CACHE_TTL = 24 * 60 * 60 * 1000; // 24시간 — YouTube 일일 쿼터 리셋 주기에 맞춤
+const SEARCH_CACHE_MAX_ENTRIES = 60; // localStorage 용량 관리를 위한 캐시 상한
+const USAGE_KEY = "tracklist_api_usage";
 
 export default function Page() {
   const [apiKey, setApiKey] = useState("");
@@ -39,6 +43,8 @@ export default function Page() {
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
   const [hasSearched, setHasSearched] = useState(false);
+  const [resultFromCache, setResultFromCache] = useState(false);
+  const [apiCallsToday, setApiCallsToday] = useState(0);
 
   const [playlist, setPlaylist] = useState([]);
   const [currentId, setCurrentId] = useState(null);
@@ -88,6 +94,7 @@ export default function Page() {
     } catch (e) {
       // localStorage 접근 불가 환경(예: 프라이빗 모드) — 무시
     }
+    setApiCallsToday(loadUsageCount());
   }, []);
 
   const showToast = useCallback((msg) => {
@@ -115,9 +122,27 @@ export default function Page() {
       setSearchError("먼저 YouTube API 키를 입력해 주세요.");
       return;
     }
-    setSearching(true);
+    if (searching) return; // 이미 요청 중이면 중복 호출 방지
+
     setSearchError("");
     setHasSearched(true);
+    setResultFromCache(false);
+
+    // 1) 캐시 확인 — 24시간 이내에 같은 검색어를 찾았다면 API를 호출하지 않고 재사용
+    const cacheKeyQ = normalizeQuery(q);
+    const cache = loadSearchCache();
+    const cached = cache[cacheKeyQ];
+    if (cached && Date.now() - cached.timestamp < SEARCH_CACHE_TTL) {
+      setResults(cached.items);
+      setResultFromCache(true);
+      if (cached.items.length === 0) {
+        setSearchError("검색 결과가 없어요. 다른 검색어를 시도해 보세요.");
+      }
+      return;
+    }
+
+    // 2) 캐시에 없을 때만 실제 API 호출
+    setSearching(true);
     try {
       const url = new URL("https://www.googleapis.com/youtube/v3/search");
       url.searchParams.set("part", "snippet");
@@ -150,6 +175,10 @@ export default function Page() {
       if (items.length === 0) {
         setSearchError("검색 결과가 없어요. 다른 검색어를 시도해 보세요.");
       }
+
+      // 3) 결과를 캐시에 저장하고, 실제 API 호출 횟수 카운트 증가
+      saveSearchCache({ ...cache, [cacheKeyQ]: { items, timestamp: Date.now() } });
+      setApiCallsToday(bumpUsageCount());
     } catch (err) {
       setResults([]);
       setSearchError(err.message || "검색 중 오류가 발생했어요.");
@@ -404,6 +433,10 @@ export default function Page() {
           </button>
         </form>
         {searchError && <p className="error-text">{searchError}</p>}
+        <p className="usage-hint">
+          오늘 YouTube API 검색 호출 <strong>{apiCallsToday}회</strong> · 같은
+          검색어는 24시간 동안 캐시에서 불러와 쿼터를 아껴요
+        </p>
       </section>
 
       <main className="layout">
@@ -411,7 +444,12 @@ export default function Page() {
         <section className="panel results-panel">
           <div className="panel-head">
             <h3>검색 결과</h3>
-            {results.length > 0 && <span className="count">{results.length}곡</span>}
+            {results.length > 0 && (
+              <span className="count">
+                {results.length}곡
+                {resultFromCache && <span className="cache-badge">⚡ 캐시됨</span>}
+              </span>
+            )}
           </div>
 
           {!hasSearched && (
@@ -784,6 +822,27 @@ export default function Page() {
           margin-top: 12px;
           color: var(--needle);
           font-size: 13px;
+        }
+        .usage-hint {
+          margin: 12px 0 0;
+          font-family: "Space Mono", monospace;
+          font-size: 11.5px;
+          color: var(--text-muted);
+        }
+        .usage-hint strong {
+          color: var(--accent);
+          font-weight: 700;
+        }
+        .cache-badge {
+          margin-left: 6px;
+          font-family: "Space Mono", monospace;
+          font-size: 10px;
+          color: var(--accent);
+          border: 1px solid var(--accent-soft);
+          background: var(--accent-soft);
+          padding: 1px 6px;
+          border-radius: 999px;
+          text-transform: uppercase;
         }
 
         .btn-solid {
@@ -1349,6 +1408,66 @@ async function fetchAlbumArt(rawTitle, channel) {
   }
 
   return null;
+}
+
+// 검색어 정규화 (대소문자/공백 차이로 캐시가 갈리지 않도록)
+function normalizeQuery(q) {
+  return q.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+// 검색 결과 캐시(localStorage) 불러오기 — 실패 시 빈 객체로 폴백
+function loadSearchCache() {
+  try {
+    return JSON.parse(window.localStorage.getItem(SEARCH_CACHE_KEY) || "{}");
+  } catch (e) {
+    return {};
+  }
+}
+
+// 검색 결과 캐시 저장. 항목이 너무 많아지면 최신 것만 남기고 정리(용량 관리)
+function saveSearchCache(cache) {
+  try {
+    const entries = Object.entries(cache);
+    let trimmed = cache;
+    if (entries.length > SEARCH_CACHE_MAX_ENTRIES) {
+      trimmed = Object.fromEntries(
+        entries
+          .sort((a, b) => b[1].timestamp - a[1].timestamp)
+          .slice(0, SEARCH_CACHE_MAX_ENTRIES)
+      );
+    }
+    window.localStorage.setItem(SEARCH_CACHE_KEY, JSON.stringify(trimmed));
+  } catch (e) {
+    // 저장 공간 초과 등은 조용히 무시 (캐시는 있으면 좋은 최적화일 뿐, 필수 아님)
+  }
+}
+
+function todayKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+// 오늘 실제로 호출한 search.list 횟수 불러오기
+function loadUsageCount() {
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(USAGE_KEY) || "{}");
+    return raw[todayKey()] || 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+// 실제 API 호출이 성공했을 때만 호출 — 오늘 날짜 기준으로 카운트 증가
+function bumpUsageCount() {
+  try {
+    const raw = JSON.parse(window.localStorage.getItem(USAGE_KEY) || "{}");
+    const key = todayKey();
+    const next = (raw[key] || 0) + 1;
+    // 지난 날짜 기록은 필요 없으니 오늘 것만 유지
+    window.localStorage.setItem(USAGE_KEY, JSON.stringify({ [key]: next }));
+    return next;
+  } catch (e) {
+    return 0;
+  }
 }
 
 function decodeHtml(str) {

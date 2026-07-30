@@ -1,14 +1,15 @@
 "use client";
 
 /**
- * TRACKLIST — YouTube 검색 기반 6곡 믹스테이프 플레이리스트
+ * TRACKLIST — YouTube 검색 기반 믹스테이프 플레이리스트
  * -----------------------------------------------------------
- * - YouTube Data API v3 (search.list) 로 노래 검색
- * - 검색 결과에서 최대 6곡까지 플레이리스트에 담기 (믹스테이프 트랙 01~06)
+ * - YouTube Data API v3 (search.list) 로 노래 검색, 트랙 수 제한 없음
  * - 플레이리스트에 추가되는 순간, iTunes Search API(키 불필요)로 같은 곡을
  *   찾아 앨범 아트를 가져와 오른쪽 트랙 썸네일을 앨범 커버로 교체
  *   (매칭 실패 시 유튜브 썸네일을 그대로 사용)
- * - 플레이리스트에서 곡을 선택하면 하단에 유튜브 플레이어로 재생
+ * - YouTube IFrame Player API로 실제 재생/일시정지 상태를 제어
+ * - 자동재생(다음 곡으로 자동 진행) on/off, 반복 모드(안함/전체/한 곡) 지원
+ * - 드래그 핸들(⋮⋮)로 플레이리스트 순서를 사이트 톤에 맞게 커스텀 드래그 정렬
  * - 재생 중인 곡은 바이닐(LP) 아트가 회전하는 시그니처 인터랙션 (앨범 아트가 있으면 그걸 라벨로 사용)
  * - 각 트랙의 썸네일(앨범 아트 우선) 이미지를 로컬에 저장(다운로드) 가능
  *
@@ -17,15 +18,15 @@
  * 1) 우측 상단 "API 키" 버튼을 눌러 YouTube Data API v3 키를 입력하세요.
  *    (브라우저 localStorage에만 저장되며, 서버로 전송되지 않습니다.)
  * 2) 검색창에 곡 제목/아티스트를 입력하고 검색하세요.
- * 3) 검색 결과 카드의 + 버튼으로 플레이리스트(최대 6곡)에 추가하세요.
+ * 3) 검색 결과 카드의 + 버튼으로 플레이리스트에 추가하세요.
  *    → 추가와 동시에 iTunes에서 앨범 아트를 자동으로 찾아옵니다.
- * 4) 플레이리스트에서 트랙을 클릭하면 재생됩니다.
- * 5) 각 카드의 저장 아이콘으로 썸네일(앨범 아트) 이미지를 다운로드할 수 있습니다.
+ * 4) 플레이리스트에서 트랙을 클릭하면 재생됩니다. 드래그 핸들로 순서를 바꿀 수 있어요.
+ * 5) 자동재생 / 반복 모드는 플레이리스트 상단 툴바에서 설정하세요.
+ * 6) 각 카드의 저장 아이콘으로 썸네일(앨범 아트) 이미지를 다운로드할 수 있습니다.
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
 
-const MAX_TRACKS = 6;
 const STORAGE_KEY = "tracklist_yt_api_key";
 
 export default function Page() {
@@ -42,9 +43,37 @@ export default function Page() {
   const [playlist, setPlaylist] = useState([]);
   const [currentId, setCurrentId] = useState(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [autoPlay, setAutoPlay] = useState(true);
+  const [repeatMode, setRepeatMode] = useState("off"); // 'off' | 'all' | 'one'
+
+  const [dragIndex, setDragIndex] = useState(null);
+  const [dragOverIndex, setDragOverIndex] = useState(null);
 
   const [toast, setToast] = useState("");
   const toastTimer = useRef(null);
+
+  // YouTube IFrame Player API 연동용 ref
+  const playerContainerId = useRef(`yt-player-${Math.random().toString(36).slice(2)}`);
+  const playerRef = useRef(null);
+  const [ytApiReady, setYtApiReady] = useState(false);
+
+  // 이벤트 콜백에서 최신 값을 읽기 위한 ref (클로저 stale 문제 방지)
+  const playlistRef = useRef(playlist);
+  const currentIdRef = useRef(currentId);
+  const autoPlayRef = useRef(autoPlay);
+  const repeatModeRef = useRef(repeatMode);
+  useEffect(() => {
+    playlistRef.current = playlist;
+  }, [playlist]);
+  useEffect(() => {
+    currentIdRef.current = currentId;
+  }, [currentId]);
+  useEffect(() => {
+    autoPlayRef.current = autoPlay;
+  }, [autoPlay]);
+  useEffect(() => {
+    repeatModeRef.current = repeatMode;
+  }, [repeatMode]);
 
   // 저장된 API 키 불러오기
   useEffect(() => {
@@ -134,10 +163,6 @@ export default function Page() {
       showToast("이미 플레이리스트에 있는 곡이에요");
       return;
     }
-    if (playlist.length >= MAX_TRACKS) {
-      showToast(`플레이리스트는 최대 ${MAX_TRACKS}곡까지만 담을 수 있어요`);
-      return;
-    }
     // 우선 유튜브 썸네일로 즉시 추가하고, 앨범 아트는 비동기로 찾아서 교체
     setPlaylist((prev) => [...prev, { ...track, albumArt: null, artLoading: true }]);
     showToast(`"${track.title}" 추가됨 · 앨범 아트 찾는 중...`);
@@ -164,6 +189,143 @@ export default function Page() {
     setIsPlaying(true);
   }
 
+  function togglePlayPause() {
+    if (!playerRef.current) return;
+    if (isPlaying) {
+      playerRef.current.pauseVideo();
+    } else {
+      playerRef.current.playVideo();
+    }
+  }
+
+  function cycleRepeatMode() {
+    setRepeatMode((prev) => {
+      const next = prev === "off" ? "all" : prev === "all" ? "one" : "off";
+      const labels = { off: "반복 안 함", all: "전체 반복", one: "한 곡 반복" };
+      showToast(labels[next]);
+      return next;
+    });
+  }
+
+  function toggleAutoPlay() {
+    setAutoPlay((prev) => {
+      showToast(!prev ? "자동재생 켜짐" : "자동재생 꺼짐");
+      return !prev;
+    });
+  }
+
+  // 현재 곡이 끝났을 때: 반복 모드 / 자동재생 설정에 따라 다음 동작 결정
+  function handleTrackEnd() {
+    const list = playlistRef.current;
+    const curId = currentIdRef.current;
+
+    if (repeatModeRef.current === "one") {
+      playerRef.current?.seekTo(0);
+      playerRef.current?.playVideo();
+      return;
+    }
+
+    if (!autoPlayRef.current) {
+      setIsPlaying(false);
+      return;
+    }
+
+    const idx = list.findIndex((t) => t.id === curId);
+    const nextTrack = list[idx + 1];
+    if (nextTrack) {
+      playTrack(nextTrack.id);
+    } else if (repeatModeRef.current === "all" && list.length > 0) {
+      playTrack(list[0].id);
+    } else {
+      setIsPlaying(false);
+    }
+  }
+
+  // 드래그 정렬: 순서 배열 재배치
+  function reorderPlaylist(fromIndex, toIndex) {
+    setPlaylist((prev) => {
+      if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+  }
+
+  function handleDragStart(e, index) {
+    setDragIndex(index);
+    e.dataTransfer.effectAllowed = "move";
+    try {
+      e.dataTransfer.setData("text/plain", String(index));
+    } catch (err) {}
+  }
+
+  function handleDragOver(e, index) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (index !== dragOverIndex) setDragOverIndex(index);
+  }
+
+  function handleDrop(e, index) {
+    e.preventDefault();
+    if (dragIndex !== null && dragIndex !== index) {
+      reorderPlaylist(dragIndex, index);
+    }
+    setDragIndex(null);
+    setDragOverIndex(null);
+  }
+
+  function handleDragEnd() {
+    setDragIndex(null);
+    setDragOverIndex(null);
+  }
+
+  // YouTube IFrame Player API 스크립트를 한 번만 로드
+  useEffect(() => {
+    if (window.YT && window.YT.Player) {
+      setYtApiReady(true);
+      return;
+    }
+    const existing = document.getElementById("youtube-iframe-api");
+    const prevCallback = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => {
+      if (typeof prevCallback === "function") prevCallback();
+      setYtApiReady(true);
+    };
+    if (!existing) {
+      const tag = document.createElement("script");
+      tag.id = "youtube-iframe-api";
+      tag.src = "https://www.youtube.com/iframe_api";
+      document.body.appendChild(tag);
+    }
+  }, []);
+
+  // currentTrack이 바뀌면 플레이어를 생성하거나 영상을 교체
+  useEffect(() => {
+    if (!ytApiReady || !currentId) return;
+
+    if (!playerRef.current) {
+      playerRef.current = new window.YT.Player(playerContainerId.current, {
+        videoId: currentId,
+        playerVars: { autoplay: 1, rel: 0 },
+        events: {
+          onReady: (e) => {
+            e.target.playVideo();
+          },
+          onStateChange: (e) => {
+            const YTState = window.YT.PlayerState;
+            if (e.data === YTState.PLAYING) setIsPlaying(true);
+            else if (e.data === YTState.PAUSED) setIsPlaying(false);
+            else if (e.data === YTState.ENDED) handleTrackEnd();
+          },
+        },
+      });
+    } else {
+      playerRef.current.loadVideoById(currentId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ytApiReady, currentId]);
+
   async function saveThumbnail(track) {
     const imageUrl = track.albumArt || track.thumb;
     try {
@@ -187,7 +349,6 @@ export default function Page() {
   }
 
   const currentTrack = playlist.find((t) => t.id === currentId) || null;
-  const emptySlots = Math.max(0, MAX_TRACKS - playlist.length);
 
   return (
     <div className="page">
@@ -300,21 +461,61 @@ export default function Page() {
           </ul>
         </section>
 
-        {/* 플레이리스트 (믹스테이프 트랙 01~06) */}
+        {/* 플레이리스트 (믹스테이프, 무제한) */}
         <section className="panel playlist-panel">
           <div className="panel-head">
             <h3>믹스테이프</h3>
-            <span className="count">
-              {playlist.length} / {MAX_TRACKS}
-            </span>
+            <span className="count">{playlist.length}곡</span>
           </div>
+
+          <div className="playback-toolbar">
+            <button
+              className={`toggle-pill ${autoPlay ? "on" : ""}`}
+              onClick={toggleAutoPlay}
+              title="자동재생"
+            >
+              <span className="toggle-dot" />
+              자동재생
+            </button>
+            <button className="toggle-pill" onClick={cycleRepeatMode} title="반복 모드">
+              <span className="repeat-icon">
+                {repeatMode === "one" ? "🔂" : "🔁"}
+              </span>
+              {repeatMode === "off" && "반복 안 함"}
+              {repeatMode === "all" && "전체 반복"}
+              {repeatMode === "one" && "한 곡 반복"}
+            </button>
+          </div>
+
+          {playlist.length === 0 && (
+            <div className="empty-state">
+              <p>검색 결과에서 + 버튼을 눌러 곡을 추가하세요.</p>
+            </div>
+          )}
 
           <ol className="tracklist">
             {playlist.map((track, i) => (
               <li
                 key={track.id}
-                className={`track-row ${currentId === track.id ? "active" : ""}`}
+                draggable
+                onDragStart={(e) => handleDragStart(e, i)}
+                onDragOver={(e) => handleDragOver(e, i)}
+                onDrop={(e) => handleDrop(e, i)}
+                onDragEnd={handleDragEnd}
+                className={[
+                  "track-row",
+                  currentId === track.id ? "active" : "",
+                  dragIndex === i ? "dragging" : "",
+                  dragOverIndex === i && dragIndex !== null && dragIndex !== i
+                    ? "drag-over"
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
               >
+                <span className="drag-handle" title="드래그로 순서 변경">
+                  ⋮⋮
+                </span>
                 <span className="track-num">{String(i + 1).padStart(2, "0")}</span>
                 <button className="track-main" onClick={() => playTrack(track.id)}>
                   <span className="track-thumb-wrap">
@@ -324,6 +525,13 @@ export default function Page() {
                       className="track-thumb"
                     />
                     {track.artLoading && <span className="art-loading" title="앨범 아트 찾는 중" />}
+                    {currentId === track.id && isPlaying && (
+                      <span className="playing-indicator" aria-hidden="true">
+                        <i />
+                        <i />
+                        <i />
+                      </span>
+                    )}
                   </span>
                   <span className="track-text">
                     <span className="track-title">{track.title}</span>
@@ -347,15 +555,6 @@ export default function Page() {
                 >
                   ✕
                 </button>
-              </li>
-            ))}
-
-            {Array.from({ length: emptySlots }).map((_, i) => (
-              <li key={`empty-${i}`} className="track-row empty">
-                <span className="track-num">
-                  {String(playlist.length + i + 1).padStart(2, "0")}
-                </span>
-                <span className="empty-label">빈 슬롯 — 검색 결과에서 추가하세요</span>
               </li>
             ))}
           </ol>
@@ -388,23 +587,11 @@ export default function Page() {
               <h3>{currentTrack.title}</h3>
               <p className="np-channel">{currentTrack.channel}</p>
               <div className="player-frame">
-                <iframe
-                  key={currentTrack.id}
-                  width="100%"
-                  height="100%"
-                  src={`https://www.youtube.com/embed/${currentTrack.id}?autoplay=1`}
-                  title={currentTrack.title}
-                  frameBorder="0"
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                  allowFullScreen
-                />
+                <div id={playerContainerId.current} className="yt-player-target" />
               </div>
               <div className="np-actions">
-                <button
-                  className="btn-outline"
-                  onClick={() => setIsPlaying((v) => !v)}
-                >
-                  {isPlaying ? "일시정지 표시" : "재생 표시"}
+                <button className="btn-outline" onClick={togglePlayPause}>
+                  {isPlaying ? "일시정지" : "재생"}
                 </button>
                 <button className="btn-outline" onClick={() => saveThumbnail(currentTrack)}>
                   썸네일 저장
@@ -665,6 +852,46 @@ export default function Page() {
           color: var(--text-muted);
         }
 
+        .playback-toolbar {
+          display: flex;
+          gap: 8px;
+          margin-bottom: 14px;
+        }
+        .toggle-pill {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          background: var(--bg-elev-2);
+          border: 1px solid var(--border);
+          color: var(--text-muted);
+          padding: 7px 12px;
+          border-radius: 999px;
+          font-size: 12px;
+          font-family: "Space Mono", monospace;
+          cursor: pointer;
+        }
+        .toggle-pill:hover {
+          border-color: var(--accent);
+        }
+        .toggle-pill.on {
+          color: var(--accent);
+          border-color: var(--accent);
+          background: var(--accent-soft);
+        }
+        .toggle-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          background: #55505a;
+        }
+        .toggle-pill.on .toggle-dot {
+          background: var(--accent);
+        }
+        .repeat-icon {
+          font-size: 12px;
+          line-height: 1;
+        }
+
         .empty-state {
           padding: 26px 8px;
           color: var(--text-muted);
@@ -758,15 +985,35 @@ export default function Page() {
           border-radius: 10px;
           padding: 6px;
           background: var(--bg-elev-2);
-        }
-        .track-row.empty {
-          background: transparent;
-          border: 1px dashed var(--border);
-          color: var(--text-muted);
-          font-size: 12.5px;
+          border: 1px solid transparent;
+          transition: opacity 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
         }
         .track-row.active {
           outline: 1px solid var(--accent);
+        }
+        .track-row.dragging {
+          opacity: 0.35;
+        }
+        .track-row.drag-over {
+          border-color: var(--accent);
+          border-style: dashed;
+          transform: translateY(-1px);
+        }
+        .drag-handle {
+          flex-shrink: 0;
+          width: 16px;
+          text-align: center;
+          font-size: 12px;
+          letter-spacing: -2px;
+          color: var(--text-muted);
+          cursor: grab;
+          user-select: none;
+        }
+        .drag-handle:active {
+          cursor: grabbing;
+        }
+        .track-row:hover .drag-handle {
+          color: var(--accent);
         }
         .track-num {
           font-family: "Space Mono", monospace;
@@ -775,9 +1022,6 @@ export default function Page() {
           width: 22px;
           flex-shrink: 0;
           text-align: center;
-        }
-        .track-row.empty .track-num {
-          color: var(--text-muted);
         }
         .track-main {
           flex: 1;
@@ -855,8 +1099,42 @@ export default function Page() {
           border-radius: 999px;
           text-transform: uppercase;
         }
-        .empty-label {
-          padding: 8px 4px;
+        .playing-indicator {
+          position: absolute;
+          inset: 0;
+          background: rgba(18, 16, 20, 0.55);
+          border-radius: 6px;
+          display: flex;
+          align-items: flex-end;
+          justify-content: center;
+          gap: 2px;
+          padding-bottom: 6px;
+        }
+        .playing-indicator i {
+          width: 2px;
+          background: var(--accent);
+          border-radius: 1px;
+          animation: eq 0.9s ease-in-out infinite;
+        }
+        .playing-indicator i:nth-child(1) {
+          height: 40%;
+          animation-delay: 0s;
+        }
+        .playing-indicator i:nth-child(2) {
+          height: 90%;
+          animation-delay: 0.2s;
+        }
+        .playing-indicator i:nth-child(3) {
+          height: 60%;
+          animation-delay: 0.4s;
+        }
+        @keyframes eq {
+          0%, 100% {
+            transform: scaleY(0.4);
+          }
+          50% {
+            transform: scaleY(1);
+          }
         }
 
         .player-section {
@@ -978,6 +1256,17 @@ export default function Page() {
           overflow: hidden;
           border: 1px solid var(--border);
           background: #000;
+          position: relative;
+        }
+        .player-frame :global(iframe) {
+          position: absolute;
+          inset: 0;
+          width: 100%;
+          height: 100%;
+        }
+        .yt-player-target {
+          position: absolute;
+          inset: 0;
         }
         .np-actions {
           display: flex;

@@ -192,8 +192,15 @@ export default function Page() {
       showToast("이미 플레이리스트에 있는 곡이에요");
       return;
     }
+    // 유튜브 제목에서 "아티스트 - 곡명" 등 노이즈를 정리해 깔끔한 제목을 미리 뽑아둠
+    // (앨범 아트 검색에 쓰는 것과 같은 파서를 재사용)
+    const { song } = parseArtistAndSong(track.title, track.channel);
+
     // 우선 유튜브 썸네일로 즉시 추가하고, 앨범 아트는 비동기로 찾아서 교체
-    setPlaylist((prev) => [...prev, { ...track, albumArt: null, artLoading: true }]);
+    setPlaylist((prev) => [
+      ...prev,
+      { ...track, cleanTitle: song || track.title, albumArt: null, artLoading: true },
+    ]);
     showToast(`"${track.title}" 추가됨 · 앨범 아트 찾는 중...`);
 
     fetchAlbumArt(track.title, track.channel).then((artUrl) => {
@@ -573,10 +580,7 @@ export default function Page() {
                   </span>
                   <span className="track-text">
                     <span className="track-title">{track.title}</span>
-                    <span className="track-channel">
-                      {track.channel}
-                      {track.albumArt && <span className="art-badge">앨범 아트</span>}
-                    </span>
+                    <span className="track-channel">{track.channel}</span>
                   </span>
                 </button>
                 <button
@@ -622,7 +626,7 @@ export default function Page() {
           {currentTrack ? (
             <>
               <p className="eyebrow">NOW PLAYING</p>
-              <h3>{currentTrack.title}</h3>
+              <h3>{currentTrack.cleanTitle || currentTrack.title}</h3>
               <p className="np-channel">{currentTrack.channel}</p>
               <div className="player-frame">
                 <div id={playerContainerId.current} className="yt-player-target" />
@@ -1143,20 +1147,6 @@ export default function Page() {
         .track-channel {
           font-size: 11px;
           color: var(--text-muted);
-          display: flex;
-          align-items: center;
-          gap: 6px;
-        }
-        .art-badge {
-          font-family: "Space Mono", monospace;
-          font-size: 9px;
-          letter-spacing: 0.04em;
-          color: var(--accent);
-          border: 1px solid var(--accent-soft);
-          background: var(--accent-soft);
-          padding: 1px 5px;
-          border-radius: 999px;
-          text-transform: uppercase;
         }
         .playing-indicator {
           position: absolute;

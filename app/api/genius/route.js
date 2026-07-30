@@ -1,8 +1,6 @@
 import { NextResponse } from 'next/server';
 import * as cheerio from 'cheerio';
 
-const GENIUS_ACCESS_TOKEN = 'YOUR_GENIUS_ACCESS_TOKEN'; // 발급받은 토큰 입력
-
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const title = searchParams.get('title');

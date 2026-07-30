@@ -1004,37 +1004,62 @@ export default function Page() {
   );
 }
 
-// 유튜브 제목에 흔히 붙는 군더더기를 제거해 iTunes 검색 정확도를 높임
-function cleanTitleForSearch(title) {
-  return title
-    .replace(/\(.*?\)/g, " ")
-    .replace(/\[.*?\]/g, " ")
+// 유튜브 제목에서 노이즈(공식영상/가사 표기 등)를 제거
+function stripNoise(str) {
+  return str
     .replace(
-      /official\s*(music\s*)?video|official\s*audio|lyrics?|m\/?v|mv|hd|4k|visualizer|audio only/gi,
+      /official\s*(music\s*)?video|official\s*audio|lyrics?\s*video|lyrics?|m\/?v|hd|4k|visualizer|audio\s*only/gi,
       " "
     )
-    .replace(/[-–—|].*$/, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-// iTunes Search API(무료, 키 불필요)로 앨범 아트 URL을 찾는다.
-// 매칭에 실패하거나 네트워크 오류가 나면 null을 반환해 유튜브 썸네일로 폴백한다.
-async function fetchAlbumArt(rawTitle, channel) {
-  const cleanTitle = cleanTitleForSearch(rawTitle);
-  const term = encodeURIComponent(`${channel} ${cleanTitle}`.trim());
-  try {
-    const url = `https://itunes.apple.com/search?term=${term}&media=music&entity=song&limit=1`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const data = await res.json();
-    const hit = data.results?.[0];
-    if (!hit?.artworkUrl100) return null;
-    // 100x100 기본 이미지를 600x600 고해상도로 교체
-    return hit.artworkUrl100.replace("100x100bb", "600x600bb");
-  } catch (err) {
-    return null;
+// "Christopher - Orbit" 같은 "아티스트 - 곡명" 포맷을 인식해서 분리.
+// 구분자가 없으면 채널명을 아티스트로, 제목 전체를 곡명으로 취급.
+function parseArtistAndSong(rawTitle, channel) {
+  const cleaned = stripNoise(rawTitle.replace(/\(.*?\)/g, " ").replace(/\[.*?\]/g, " "));
+  const parts = cleaned.split(/\s[-–—]\s/); // " - " / " – " / " — " 기준 분리
+
+  if (parts.length >= 2 && parts[0].trim() && parts[1].trim()) {
+    return { artist: parts[0].trim(), song: parts.slice(1).join(" - ").trim() };
   }
+  return { artist: channel.replace(/\s*-\s*Topic$/i, "").trim(), song: cleaned };
+}
+
+// iTunes Search API(무료, 키 불필요)로 앨범 아트 URL을 찾는다.
+// 1차: "아티스트 + 곡명"으로 검색 → 실패 시 2차: 채널명 + 곡명으로 재시도.
+// 둘 다 실패하면 null을 반환해 유튜브 썸네일로 폴백한다.
+async function fetchAlbumArt(rawTitle, channel) {
+  const { artist, song } = parseArtistAndSong(rawTitle, channel);
+
+  const tryQuery = async (term) => {
+    try {
+      const url = `https://itunes.apple.com/search?term=${encodeURIComponent(
+        term
+      )}&media=music&entity=song&limit=1`;
+      const res = await fetch(url);
+      if (!res.ok) return null;
+      const data = await res.json();
+      const hit = data.results?.[0];
+      if (!hit?.artworkUrl100) return null;
+      return hit.artworkUrl100.replace("100x100bb", "600x600bb");
+    } catch (err) {
+      return null;
+    }
+  };
+
+  const primary = await tryQuery(`${artist} ${song}`.trim());
+  if (primary) return primary;
+
+  // 파싱된 아티스트가 채널명과 다르면, 채널명 기준으로 한 번 더 시도
+  const channelClean = channel.replace(/\s*-\s*Topic$/i, "").trim();
+  if (channelClean && channelClean.toLowerCase() !== artist.toLowerCase()) {
+    const fallback = await tryQuery(`${channelClean} ${song}`.trim());
+    if (fallback) return fallback;
+  }
+
+  return null;
 }
 
 function decodeHtml(str) {

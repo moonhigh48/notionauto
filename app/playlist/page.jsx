@@ -5,9 +5,12 @@
  * -----------------------------------------------------------
  * - YouTube Data API v3 (search.list) 로 노래 검색
  * - 검색 결과에서 최대 6곡까지 플레이리스트에 담기 (믹스테이프 트랙 01~06)
+ * - 플레이리스트에 추가되는 순간, iTunes Search API(키 불필요)로 같은 곡을
+ *   찾아 앨범 아트를 가져와 오른쪽 트랙 썸네일을 앨범 커버로 교체
+ *   (매칭 실패 시 유튜브 썸네일을 그대로 사용)
  * - 플레이리스트에서 곡을 선택하면 하단에 유튜브 플레이어로 재생
- * - 재생 중인 곡은 바이닐(LP) 아트가 회전하는 시그니처 인터랙션
- * - 각 트랙의 썸네일 이미지를 로컬에 저장(다운로드) 가능
+ * - 재생 중인 곡은 바이닐(LP) 아트가 회전하는 시그니처 인터랙션 (앨범 아트가 있으면 그걸 라벨로 사용)
+ * - 각 트랙의 썸네일(앨범 아트 우선) 이미지를 로컬에 저장(다운로드) 가능
  *
  * 사용 방법
  * -----------------------------------------------------------
@@ -15,8 +18,9 @@
  *    (브라우저 localStorage에만 저장되며, 서버로 전송되지 않습니다.)
  * 2) 검색창에 곡 제목/아티스트를 입력하고 검색하세요.
  * 3) 검색 결과 카드의 + 버튼으로 플레이리스트(최대 6곡)에 추가하세요.
+ *    → 추가와 동시에 iTunes에서 앨범 아트를 자동으로 찾아옵니다.
  * 4) 플레이리스트에서 트랙을 클릭하면 재생됩니다.
- * 5) 각 카드의 저장 아이콘으로 썸네일 이미지를 다운로드할 수 있습니다.
+ * 5) 각 카드의 저장 아이콘으로 썸네일(앨범 아트) 이미지를 다운로드할 수 있습니다.
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -134,8 +138,17 @@ export default function Page() {
       showToast(`플레이리스트는 최대 ${MAX_TRACKS}곡까지만 담을 수 있어요`);
       return;
     }
-    setPlaylist((prev) => [...prev, track]);
-    showToast(`"${track.title}" 추가됨`);
+    // 우선 유튜브 썸네일로 즉시 추가하고, 앨범 아트는 비동기로 찾아서 교체
+    setPlaylist((prev) => [...prev, { ...track, albumArt: null, artLoading: true }]);
+    showToast(`"${track.title}" 추가됨 · 앨범 아트 찾는 중...`);
+
+    fetchAlbumArt(track.title, track.channel).then((artUrl) => {
+      setPlaylist((prev) =>
+        prev.map((t) =>
+          t.id === track.id ? { ...t, albumArt: artUrl, artLoading: false } : t
+        )
+      );
+    });
   }
 
   function removeFromPlaylist(id) {
@@ -152,8 +165,9 @@ export default function Page() {
   }
 
   async function saveThumbnail(track) {
+    const imageUrl = track.albumArt || track.thumb;
     try {
-      const res = await fetch(track.thumb, { mode: "cors" });
+      const res = await fetch(imageUrl, { mode: "cors" });
       if (!res.ok) throw new Error("이미지를 불러올 수 없어요");
       const blob = await res.blob();
       const objectUrl = URL.createObjectURL(blob);
@@ -167,7 +181,7 @@ export default function Page() {
       showToast("썸네일을 저장했어요");
     } catch (err) {
       // CORS 등으로 blob 다운로드가 막히면 새 탭에서 열어 저장하도록 안내
-      window.open(track.thumb, "_blank", "noopener,noreferrer");
+      window.open(imageUrl, "_blank", "noopener,noreferrer");
       showToast("새 탭에서 열었어요. 이미지를 우클릭해 저장하세요");
     }
   }
@@ -303,10 +317,20 @@ export default function Page() {
               >
                 <span className="track-num">{String(i + 1).padStart(2, "0")}</span>
                 <button className="track-main" onClick={() => playTrack(track.id)}>
-                  <img src={track.thumb} alt="" className="track-thumb" />
+                  <span className="track-thumb-wrap">
+                    <img
+                      src={track.albumArt || track.thumb}
+                      alt=""
+                      className="track-thumb"
+                    />
+                    {track.artLoading && <span className="art-loading" title="앨범 아트 찾는 중" />}
+                  </span>
                   <span className="track-text">
                     <span className="track-title">{track.title}</span>
-                    <span className="track-channel">{track.channel}</span>
+                    <span className="track-channel">
+                      {track.channel}
+                      {track.albumArt && <span className="art-badge">앨범 아트</span>}
+                    </span>
                   </span>
                 </button>
                 <button
@@ -344,7 +368,11 @@ export default function Page() {
           <div className={`vinyl ${isPlaying && currentTrack ? "spinning" : ""}`}>
             <div className="vinyl-grooves" />
             {currentTrack ? (
-              <img src={currentTrack.thumb} alt="" className="vinyl-label" />
+              <img
+                src={currentTrack.albumArt || currentTrack.thumb}
+                alt=""
+                className="vinyl-label"
+              />
             ) : (
               <div className="vinyl-label vinyl-label-empty" />
             )}
@@ -763,12 +791,39 @@ export default function Page() {
           min-width: 0;
           text-align: left;
         }
+        .track-thumb-wrap {
+          position: relative;
+          flex-shrink: 0;
+          width: 42px;
+          height: 42px;
+        }
         .track-thumb {
           width: 42px;
           height: 42px;
           border-radius: 6px;
           object-fit: cover;
           flex-shrink: 0;
+        }
+        .art-loading {
+          position: absolute;
+          top: -3px;
+          right: -3px;
+          width: 10px;
+          height: 10px;
+          border-radius: 50%;
+          background: var(--accent);
+          box-shadow: 0 0 0 2px var(--bg-elev-2);
+          animation: pulse 1s ease-in-out infinite;
+        }
+        @keyframes pulse {
+          0%, 100% {
+            opacity: 1;
+            transform: scale(1);
+          }
+          50% {
+            opacity: 0.4;
+            transform: scale(0.75);
+          }
         }
         .track-text {
           display: flex;
@@ -785,6 +840,20 @@ export default function Page() {
         .track-channel {
           font-size: 11px;
           color: var(--text-muted);
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .art-badge {
+          font-family: "Space Mono", monospace;
+          font-size: 9px;
+          letter-spacing: 0.04em;
+          color: var(--accent);
+          border: 1px solid var(--accent-soft);
+          background: var(--accent-soft);
+          padding: 1px 5px;
+          border-radius: 999px;
+          text-transform: uppercase;
         }
         .empty-label {
           padding: 8px 4px;
@@ -933,6 +1002,39 @@ export default function Page() {
       `}</style>
     </div>
   );
+}
+
+// 유튜브 제목에 흔히 붙는 군더더기를 제거해 iTunes 검색 정확도를 높임
+function cleanTitleForSearch(title) {
+  return title
+    .replace(/\(.*?\)/g, " ")
+    .replace(/\[.*?\]/g, " ")
+    .replace(
+      /official\s*(music\s*)?video|official\s*audio|lyrics?|m\/?v|mv|hd|4k|visualizer|audio only/gi,
+      " "
+    )
+    .replace(/[-–—|].*$/, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// iTunes Search API(무료, 키 불필요)로 앨범 아트 URL을 찾는다.
+// 매칭에 실패하거나 네트워크 오류가 나면 null을 반환해 유튜브 썸네일로 폴백한다.
+async function fetchAlbumArt(rawTitle, channel) {
+  const cleanTitle = cleanTitleForSearch(rawTitle);
+  const term = encodeURIComponent(`${channel} ${cleanTitle}`.trim());
+  try {
+    const url = `https://itunes.apple.com/search?term=${term}&media=music&entity=song&limit=1`;
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const hit = data.results?.[0];
+    if (!hit?.artworkUrl100) return null;
+    // 100x100 기본 이미지를 600x600 고해상도로 교체
+    return hit.artworkUrl100.replace("100x100bb", "600x600bb");
+  } catch (err) {
+    return null;
+  }
 }
 
 function decodeHtml(str) {

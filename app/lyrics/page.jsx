@@ -7,10 +7,6 @@ const poppins = Poppins({ subsets: ['latin'], weight: ['400', '500', '600', '700
 const montserrat = Montserrat({ subsets: ['latin'], weight: ['400', '500', '600', '700', '800'], display: 'swap' });
 const inter = Inter({ subsets: ['latin'], weight: ['400', '500', '600', '700', '800'], display: 'swap' });
 
-// ⚠️ Spotify Developer Dashboard에서 발급받은 클라이언트 정보 입력
-const SPOTIFY_CLIENT_ID = 'YOUR_SPOTIFY_CLIENT_ID';
-const SPOTIFY_CLIENT_SECRET = 'YOUR_SPOTIFY_CLIENT_SECRET';
-
 export default function LyricCardPage() {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
@@ -24,30 +20,12 @@ export default function LyricCardPage() {
   const [customFontName, setCustomFontName] = useState('');
 
   const [cardData, setCardData] = useState({
-    title: 'Title',
-    artist: 'Artist',
-    coverUrl: '',
+    title: 'Walk Thru Fire',
+    artist: 'Vicetone',
+    coverUrl: 'https://via.placeholder.com/300?text=Album+Art',
   });
 
   const innerCardRef = useRef(null);
-
-  // Spotify Access Token 획득
-  const getSpotifyAccessToken = async () => {
-    try {
-      const res = await fetch('https://accounts.spotify.com/api/token', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          Authorization: 'Basic ' + btoa(`${SPOTIFY_CLIENT_ID}:${SPOTIFY_CLIENT_SECRET}`),
-        },
-        body: 'grant_type=client_credentials',
-      });
-      const data = await res.json();
-      return data.access_token;
-    } catch (e) {
-      return null;
-    }
-  };
 
   // 폰트 업로드
   const handleCustomFontUpload = (e) => {
@@ -78,86 +56,73 @@ export default function LyricCardPage() {
 
   const normalizeText = (text) => text.toLowerCase().replace(/[^a-z0-9가-힣]/g, '');
 
-  // 가사 가져오기 (lyrics.ovh)
-const fetchLyrics = async (artist, title) => {
-  try {
-    const res = await fetch(`/api/genius?title=${encodeURIComponent(title)}&artist=${encodeURIComponent(artist)}`);
-    const data = await res.json();
+  // LRCLIB API로 가사 불러오기
+  const fetchLyricsFromLrclib = async (artist, title) => {
+    try {
+      // 1. Exact Match 요청
+      const getRes = await fetch(
+        `https://lrclib.net/api/get?artist_name=${encodeURIComponent(artist)}&track_name=${encodeURIComponent(title)}`,
+        { headers: { 'Lrclib-Client': 'LyricCardGenerator (https://github.com)' } }
+      );
 
-    if (data.lyrics) {
-      return data.lyrics
-        .split('\n')
-        .map((l) => l.trim())
-        .filter((l) => l.length > 0 && !l.startsWith('[')); // [Verse], [Chorus] 등의 주석 태그 제외 처리
+      if (getRes.ok) {
+        const data = await getRes.json();
+        const lyricsText = data.plainLyrics || (data.syncedLyrics ? data.syncedLyrics.replace(/\[\d+:\d+\.\d+\]/g, '') : null);
+        if (lyricsText) {
+          return lyricsText.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+        }
+      }
+
+      // 2. Exact Match 실패 시 Search API 사용
+      const searchRes = await fetch(
+        `https://lrclib.net/api/search?track_name=${encodeURIComponent(title)}&artist_name=${encodeURIComponent(artist)}`,
+        { headers: { 'Lrclib-Client': 'LyricCardGenerator (https://github.com)' } }
+      );
+
+      if (searchRes.ok) {
+        const searchData = await searchRes.json();
+        if (searchData.length > 0 && (searchData[0].plainLyrics || searchData[0].syncedLyrics)) {
+          const item = searchData[0];
+          const lyricsText = item.plainLyrics || item.syncedLyrics.replace(/\[\d+:\d+\.\d+\]/g, '');
+          return lyricsText.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+        }
+      }
+    } catch (e) {
+      console.error('LRCLIB fetch error:', e);
     }
-  } catch (e) {
-    console.error('Genius lyrics fetch failed:', e);
-  }
-  return [];
-};
+    return [];
+  };
 
-  // 검색 처리 (iTunes 메인 + Spotify 서브)
+  // iTunes 메인 검색
   const handleSearch = async () => {
     if (!query.trim()) return alert('노래 제목이나 가수를 입력해주세요.');
     setLoading(true);
     setResults([]);
 
     try {
-      // 1. iTunes API 검색 (메인)
-      const itunesPromise = fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=8`)
-        .then(res => res.json())
-        .then(data => data.results || [])
-        .catch(() => []);
+      const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(query)}&entity=song&limit=10`);
+      const data = await res.json();
 
-      // 2. Spotify API 검색 (서브)
-      const spotifyPromise = (async () => {
-        if (SPOTIFY_CLIENT_ID === 'YOUR_SPOTIFY_CLIENT_ID') return [];
-        const token = await getSpotifyAccessToken();
-        if (!token) return [];
+      if (!data.results || data.results.length === 0) {
+        alert('검색 결과가 없습니다.');
+        setLoading(false);
+        return;
+      }
 
-        const res = await fetch(`https://api.spotify.com/v1/search?q=${encodeURIComponent(query)}&type=track&limit=8`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        const data = await res.json();
-        return data.tracks?.items || [];
-      })();
-
-      const [itunesResults, spotifyResults] = await Promise.all([itunesPromise, spotifyPromise]);
-
-      // iTunes 트랙 포맷팅
-      const formattedItunes = itunesResults.map(t => ({
-        id: `itunes_${t.trackId}`,
+      const formatted = data.results.map((t) => ({
+        id: t.trackId,
         title: t.trackName,
         artist: t.artistName,
         coverUrl: t.artworkUrl100.replace('100x100bb', '600x600bb'),
         platform: 'iTunes',
-        isMain: true
       }));
 
-      // Spotify 트랙 포맷팅
-      const formattedSpotify = spotifyResults.map(t => ({
-        id: `spotify_${t.id}`,
-        title: t.name,
-        artist: t.artists.map(a => a.name).join(', '),
-        coverUrl: t.album.images[0]?.url || 'https://via.placeholder.com/300',
-        platform: 'Spotify',
-        isMain: false
-      }));
-
-      // 3. 중복 제거 (iTunes 항목 우선 유지)
-      const combined = [...formattedItunes, ...formattedSpotify];
+      // 중복 제거
       const uniqueMap = new Map();
-
-      combined.forEach(track => {
-        const key = `${normalizeText(track.title)}_${normalizeText(track.artist)}`;
+      formatted.forEach((item) => {
+        const key = `${normalizeText(item.title)}_${normalizeText(item.artist)}`;
         if (!uniqueMap.has(key)) {
-          uniqueMap.set(key, track);
-        } else {
-          // 이미 존재할 경우 메인(iTunes) 트랙을 계속 유지
-          const existing = uniqueMap.get(key);
-          if (!existing.isMain && track.isMain) {
-            uniqueMap.set(key, track);
-          }
+          uniqueMap.set(key, item);
         }
       });
 
@@ -169,7 +134,7 @@ const fetchLyrics = async (artist, title) => {
     }
   };
 
-  // 파스텔톤 배경 추출
+  // 파스텔톤 배경 추출 (무채색/회색 보정 적용)
   const convertToPastelRgb = (r, g, b) => {
     r /= 255; g /= 255; b /= 255;
     const max = Math.max(r, g, b), min = Math.min(r, g, b);
@@ -185,9 +150,15 @@ const fetchLyrics = async (artist, title) => {
       }
       h /= 6;
     }
+
     const hueDegree = Math.round(h * 360);
-    const pastelSaturation = Math.min(Math.max(Math.round(s * 100), 35), 50);
-    const pastelLightness = Math.round(l * 100) < 60 ? 86 : Math.min(Math.max(Math.round(l * 100), 80), 88);
+    const origSat = Math.round(s * 100);
+
+    // 무채색(채도 10% 미만)인 경우 채도를 0%로 유지하여 회색 처리
+    const pastelSaturation = origSat < 10 ? 0 : Math.min(Math.max(origSat, 35), 50);
+    const origLightness = Math.round(l * 100);
+    const pastelLightness = origLightness < 60 ? 86 : Math.min(Math.max(origLightness, 80), 88);
+
     return `hsl(${hueDegree}, ${pastelSaturation}%, ${pastelLightness}%)`;
   };
 
@@ -209,10 +180,10 @@ const fetchLyrics = async (artist, title) => {
         }
         setBgColor(convertToPastelRgb(Math.floor(r / count), Math.floor(g / count), Math.floor(b / count)));
       } catch (e) {
-        setBgColor('hsl(200, 40%, 86%)');
+        setBgColor('hsl(200, 0%, 86%)');
       }
     };
-    img.onerror = () => setBgColor('hsl(200, 40%, 86%)');
+    img.onerror = () => setBgColor('hsl(200, 0%, 86%)');
   };
 
   const handleSelectTrack = async (track) => {
@@ -221,7 +192,7 @@ const fetchLyrics = async (artist, title) => {
     setLyricLines(['가사를 불러오는 중...']);
     setSelectedIndices([]);
 
-    const lines = await fetchLyrics(track.artist, track.title);
+    const lines = await fetchLyricsFromLrclib(track.artist, track.title);
     if (lines.length > 0) {
       setLyricLines(lines);
       setSelectedIndices([0, 1].filter((i) => i < lines.length));

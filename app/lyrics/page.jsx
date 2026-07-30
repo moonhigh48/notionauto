@@ -79,16 +79,22 @@ export default function LyricCardPage() {
   const normalizeText = (text) => text.toLowerCase().replace(/[^a-z0-9가-힣]/g, '');
 
   // 가사 가져오기 (lyrics.ovh)
-  const fetchLyrics = async (artist, title) => {
-    try {
-      const res = await fetch(`https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(title)}`);
-      const data = await res.json();
-      if (data.lyrics) {
-        return data.lyrics.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
-      }
-    } catch (e) {}
-    return [];
-  };
+const fetchLyrics = async (artist, title) => {
+  try {
+    const res = await fetch(`/api/genius?title=${encodeURIComponent(title)}&artist=${encodeURIComponent(artist)}`);
+    const data = await res.json();
+
+    if (data.lyrics) {
+      return data.lyrics
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0 && !l.startsWith('[')); // [Verse], [Chorus] 등의 주석 태그 제외 처리
+    }
+  } catch (e) {
+    console.error('Genius lyrics fetch failed:', e);
+  }
+  return [];
+};
 
   // 검색 처리 (iTunes 메인 + Spotify 서브)
   const handleSearch = async () => {

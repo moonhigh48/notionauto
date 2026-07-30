@@ -163,28 +163,54 @@ export default function LyricCardPage() {
   };
 
   const extractDominantColor = (imageUrl) => {
-    const img = new Image();
-    img.crossOrigin = 'Anonymous';
-    img.src = imageUrl;
-    img.onload = () => {
-      try {
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        canvas.width = img.width; canvas.height = img.height;
-        ctx.drawImage(img, 0, 0);
-        const imageData = ctx.getImageData(Math.floor(img.width * 0.25), Math.floor(img.height * 0.25), Math.floor(img.width * 0.5), Math.floor(img.height * 0.5));
-        const data = imageData.data;
-        let r = 0, g = 0, b = 0, count = data.length / 4;
-        for (let i = 0; i < data.length; i += 4) {
-          r += data[i]; g += data[i + 1]; b += data[i + 2];
+  const img = new Image();
+  img.crossOrigin = 'Anonymous';
+  img.src = imageUrl;
+
+  img.onload = () => {
+    try {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+
+      const imageData = ctx.getImageData(
+        Math.floor(img.width * 0.2),
+        Math.floor(img.height * 0.2),
+        Math.floor(img.width * 0.6),
+        Math.floor(img.height * 0.6)
+      );
+      const data = imageData.data;
+
+      // 색상 양자화(Quantization)를 위한 버킷 Map
+      const colorCounts = {};
+      let maxCount = 0;
+      let dominantRgb = { r: 0, g: 0, b: 0 };
+
+      // 픽셀을 16단위로 양자화하여 가장 비중이 높은 색상 찾기
+      for (let i = 0; i < data.length; i += 16) {
+        const r = Math.round(data[i] / 16) * 16;
+        const g = Math.round(data[i + 1] / 16) * 16;
+        const b = Math.round(data[i + 2] / 16) * 16;
+
+        const key = `${r},${g},${b}`;
+        colorCounts[key] = (colorCounts[key] || 0) + 1;
+
+        if (colorCounts[key] > maxCount) {
+          maxCount = colorCounts[key];
+          dominantRgb = { r, g, b };
         }
-        setBgColor(convertToPastelRgb(Math.floor(r / count), Math.floor(g / count), Math.floor(b / count)));
-      } catch (e) {
-        setBgColor('hsl(200, 0%, 86%)');
       }
-    };
-    img.onerror = () => setBgColor('hsl(200, 0%, 86%)');
+
+      setBgColor(convertToPastelRgb(dominantRgb.r, dominantRgb.g, dominantRgb.b));
+    } catch (e) {
+      setBgColor('hsl(200, 0%, 86%)');
+    }
   };
+
+  img.onerror = () => setBgColor('hsl(200, 0%, 86%)');
+};
 
   const handleSelectTrack = async (track) => {
     setCardData({ title: track.title, artist: track.artist, coverUrl: track.coverUrl });

@@ -135,54 +135,32 @@ export default function LyricCardPage() {
   };
 
   // 파스텔톤 배경 추출 (무채색/회색 보정 적용)
-const convertToPastelRgb = (r, g, b) => {
-  r /= 255;
-  g /= 255;
-  b /= 255;
+  const convertToPastelRgb = (r, g, b) => {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    let h = 0, s = 0, l = (max + min) / 2;
 
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  let h = 0;
-  let s = 0;
-  const l = (max + min) / 2;
-
-  if (max !== min) {
-    const d = max - min;
-    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-
-    switch (max) {
-      case r:
-        h = (g - b) / d + (g < b ? 6 : 0);
-        break;
-      case g:
-        h = (b - r) / d + 2;
-        break;
-      case b:
-        h = (r - g) / d + 4;
-        break;
+    if (max !== min) {
+      const d = max - min;
+      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+      switch (max) {
+        case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+        case g: h = (b - r) / d + 2; break;
+        case b: h = (r - g) / d + 4; break;
+      }
+      h /= 6;
     }
-    h /= 6;
-  }
 
-  const hueDegree = Math.round(h * 360);
-  const origSat = Math.round(s * 100);
-  const origLightness = Math.round(l * 100);
+    const hueDegree = Math.round(h * 360);
+    const origSat = Math.round(s * 100);
 
-  // 💡 보정 로직 핵심 수정:
-  // 1. 원본 명도가 25% 미만으로 어둡거나 (검은색 계열)
-  // 2. R, G, B 최대/최소 차이(max - min)가 0.15 미만이면 무채색(회색) 처리
-  const isDarkOrGrayscale = origLightness < 25 || (max - min) < 0.15;
+    // 무채색(채도 10% 미만)인 경우 채도를 0%로 유지하여 회색 처리
+    const pastelSaturation = origSat < 10 ? 0 : Math.min(Math.max(origSat, 35), 50);
+    const origLightness = Math.round(l * 100);
+    const pastelLightness = origLightness < 60 ? 86 : Math.min(Math.max(origLightness, 80), 88);
 
-  let pastelSaturation = 0;
-  if (!isDarkOrGrayscale) {
-    pastelSaturation = Math.min(Math.max(origSat, 35), 50);
-  }
-
-  // 명도는 무조건 밝은 파스텔톤(82~86%)으로 조정
-  const pastelLightness = origLightness < 60 ? 86 : Math.min(Math.max(origLightness, 80), 88);
-
-  return `hsl(${hueDegree}, ${pastelSaturation}%, ${pastelLightness}%)`;
-};
+    return `hsl(${hueDegree}, ${pastelSaturation}%, ${pastelLightness}%)`;
+  };
 
   const extractDominantColor = (imageUrl) => {
   const img = new Image();

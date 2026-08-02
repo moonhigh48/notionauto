@@ -199,14 +199,30 @@ export default function Page() {
     // 우선 유튜브 썸네일로 즉시 추가하고, 앨범 아트는 비동기로 찾아서 교체
     setPlaylist((prev) => [
       ...prev,
-      { ...track, cleanTitle: song || track.title, albumArt: null, artLoading: true },
+      {
+        ...track,
+        cleanTitle: song || track.title,
+        albumArt: null,
+        artLoading: true,
+        matchedTitle: null, // 앨범 커버로 역추적된 정식 곡 제목 (iTunes 매칭)
+        matchedArtist: null, // 앨범 커버로 역추적된 아티스트명 (iTunes 매칭)
+      },
     ]);
     showToast(`"${track.title}" 추가됨 · 앨범 아트 찾는 중...`);
 
-    fetchAlbumArt(track.title, track.channel).then((artUrl) => {
+    // 앨범 아트를 찾아오는 동시에, 그 앨범 커버가 어떤 곡/아티스트인지 역추적해 함께 반영
+    fetchAlbumArt(track.title, track.channel).then((info) => {
       setPlaylist((prev) =>
         prev.map((t) =>
-          t.id === track.id ? { ...t, albumArt: artUrl, artLoading: false } : t
+          t.id === track.id
+            ? {
+                ...t,
+                albumArt: info?.artUrl || null,
+                matchedTitle: info?.trackName || null,
+                matchedArtist: info?.artistName || null,
+                artLoading: false,
+              }
+            : t
         )
       );
     });
@@ -579,8 +595,17 @@ export default function Page() {
                     )}
                   </span>
                   <span className="track-text">
-                    <span className="track-title">{track.title}</span>
-                    <span className="track-channel">{track.channel}</span>
+                    <span className="track-title">
+                      {track.matchedTitle || track.cleanTitle || track.title}
+                    </span>
+                    <span className="track-channel">
+                      {track.matchedArtist || track.channel}
+                      {track.matchedArtist && (
+                        <span className="matched-badge" title="앨범 커버로 역추적된 정식 정보">
+                          ⓘ
+                        </span>
+                      )}
+                    </span>
                   </span>
                 </button>
                 <button
@@ -626,8 +651,8 @@ export default function Page() {
           {currentTrack ? (
             <>
               <p className="eyebrow">NOW PLAYING</p>
-              <h3>{currentTrack.cleanTitle || currentTrack.title}</h3>
-              <p className="np-channel">{currentTrack.channel}</p>
+              <h3>{currentTrack.matchedTitle || currentTrack.cleanTitle || currentTrack.title}</h3>
+              <p className="np-channel">{currentTrack.matchedArtist || currentTrack.channel}</p>
               <div className="player-frame">
                 <div id={playerContainerId.current} className="yt-player-target" />
               </div>
@@ -1323,6 +1348,14 @@ export default function Page() {
           margin-top: 14px;
         }
 
+        .matched-badge {
+          display: inline-block;
+          margin-left: 5px;
+          font-size: 10px;
+          color: var(--accent);
+          opacity: 0.85;
+        }
+
         .toast {
           position: fixed;
           left: 50%;
@@ -1365,9 +1398,11 @@ function parseArtistAndSong(rawTitle, channel) {
   return { artist: channel.replace(/\s*-\s*Topic$/i, "").trim(), song: cleaned };
 }
 
-// iTunes Search API(무료, 키 불필요)로 앨범 아트 URL을 찾는다.
+// iTunes Search API(무료, 키 불필요)로 앨범 아트를 찾는다.
 // 1차: "아티스트 + 곡명"으로 검색 → 실패 시 2차: 채널명 + 곡명으로 재시도.
-// 둘 다 실패하면 null을 반환해 유튜브 썸네일로 폴백한다.
+// 앨범 아트 URL뿐 아니라, iTunes가 실제로 매칭한 "곡 제목"과 "아티스트명"도 함께 반환한다.
+// (즉, 앨범 커버를 기준으로 역추적한 정식 곡 정보)
+// 둘 다 실패하면 null을 반환해 유튜브 제목/채널명으로 폴백한다.
 async function fetchAlbumArt(rawTitle, channel) {
   const { artist, song } = parseArtistAndSong(rawTitle, channel);
 
@@ -1381,7 +1416,11 @@ async function fetchAlbumArt(rawTitle, channel) {
       const data = await res.json();
       const hit = data.results?.[0];
       if (!hit?.artworkUrl100) return null;
-      return hit.artworkUrl100.replace("100x100bb", "600x600bb");
+      return {
+        artUrl: hit.artworkUrl100.replace("100x100bb", "600x600bb"),
+        trackName: hit.trackName || null,
+        artistName: hit.artistName || null,
+      };
     } catch (err) {
       return null;
     }

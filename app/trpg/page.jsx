@@ -637,10 +637,6 @@ export default function CoCCharacterSheet() {
     };
   }
 
-  function workerBase() {
-    return (notion.apiKey || "").replace(/\/+$/, "");
-  }
-
   async function syncToNotion() {
     if (!notion.apiKey || !notion.databaseId) {
       setNotionStatus({ state: "error", msg: "API Key와 데이터베이스 ID를 입력해줘." });
@@ -671,7 +667,7 @@ export default function CoCCharacterSheet() {
     } catch (e) {
       setNotionStatus({
         state: "error",
-        msg: `동기화 실패: ${e.message}. Worker URL이 올바른지, Worker가 배포돼 있는지, 데이터베이스가 이 연동에 "연결(Connect)"돼 있는지 확인해줘.`,
+        msg: `동기화 실패: ${e.message}. 데이터베이스가 이 연동에 "연결(Connect)"돼 있는지 확인해줘.`,
       });
     }
   }
@@ -690,10 +686,10 @@ export default function CoCCharacterSheet() {
     setBrowserLoading(true);
     setBrowserError("");
     try {
-      const res = await fetch(`${workerBase()}/query`, {
+      const res = await fetch("/api/notion", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ databaseId: notion.databaseId, page_size: 50 }),
+        body: JSON.stringify({ action: "query", apiKey: notion.apiKey,databaseId: notion.databaseId, page_size: 50 }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
@@ -718,9 +714,13 @@ export default function CoCCharacterSheet() {
     setBrowserLoading(true);
     setBrowserError("");
     try {
-      const res = await fetch(`${workerBase()}/pages/${pageId}`);
+      const res = await fetch("/api/notion", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "getPage", apiKey: notion.apiKey, pageId }),
+      });
       const page = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(page?.message || `HTTP ${res.status}`);
+      if (!res.ok) throw new Error(page?.error || page?.message || `HTTP ${res.status}`);
       const props = page.properties || {};
       const titleProp = notion.titleProp || "이름";
       const name = (props[titleProp]?.title || []).map((t) => t.plain_text).join("");
@@ -1638,7 +1638,7 @@ aside.dice-panel{
                 <span className="modal-link" onClick={() => setNotionReqOpen(true)}>→ 데이터베이스 필수 요건 보기</span>
               </div>
               <Field label="API 프록시 주소">
-                <input placeholder="/api/notion  또는  https://xxx.workers.dev" value={notion.apiKey} onChange={(e) => setNotion({ ...notion, apiKey: e.target.value })} />
+                <input placeholder="notion API key를 입력하세요" value={notion.apiKey} onChange={(e) => setNotion({ ...notion, apiKey: e.target.value })} />
               </Field>
               <Field label="데이터베이스 ID">
                 <input placeholder="32자리 ID (데이터베이스 URL에서 확인)" value={notion.databaseId} onChange={(e) => setNotion({ ...notion, databaseId: e.target.value })} />

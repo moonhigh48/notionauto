@@ -645,6 +645,7 @@ export default function CoCCharacterSheet() {
     setNotionStatus({ state: "busy", msg: "동기화 중…" });
     try {
       // 우리가 만든 Next.js API Route로 요청 전송
+      const isUpdate = Boolean(currentPageId);
       const res = await fetch("/api/notion", {
         method: "POST",
         headers: {

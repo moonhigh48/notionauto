@@ -233,7 +233,11 @@ export default function CoCCharacterSheet() {
   const [occSubName, setOccSubName] = useState("");
   const [choiceModal, setChoiceModal] = useState(null); // { title, options, count, picked, resolve }
 
-  const [notion, setNotion] = useState({ workerUrl: "/api/notion", databaseId: "", titleProp: "이름" });
+  const [notion, setNotion] = useState({
+    apiKey: "",        // 사용자가 직접 입력한 노션 API Key
+    databaseId: "",    // 사용자가 직접 입력한 데이터베이스 ID
+    titleProp: "제목"  // 노션 데이터베이스의 제목 속성 이름
+  });
   const [notionOpen, setNotionOpen] = useState(false);
   const [notionReqOpen, setNotionReqOpen] = useState(false);
   const [notionStatus, setNotionStatus] = useState({ state: "idle", msg: "" });
@@ -638,26 +642,30 @@ export default function CoCCharacterSheet() {
   }
 
   async function syncToNotion() {
-    if (!notion.workerUrl || !notion.databaseId) {
-      setNotionStatus({ state: "error", msg: "API 프록시 주소와 데이터베이스 ID를 먼저 입력해줘." });
+    if (!notion.apiKey || !notion.databaseId) {
+      setNotionStatus({ state: "error", msg: "API Key와 데이터베이스 ID를 입력해줘." });
       return;
     }
     setNotionStatus({ state: "busy", msg: "동기화 중…" });
     try {
-      const isUpdate = !!currentPageId;
-      const url = isUpdate ? `${workerBase()}/pages/${currentPageId}` : `${workerBase()}/pages`;
-      const res = await fetch(url, {
-        method: isUpdate ? "PATCH" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          isUpdate
-            ? { properties: buildNotionProperties() }
-            : { databaseId: notion.databaseId, properties: buildNotionProperties() }
-        ),
+      // 우리가 만든 Next.js API Route로 요청 전송
+      const res = await fetch("/api/notion", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          apiKey: notion.apiKey,
+          databaseId: notion.databaseId,
+          pageId: currentPageId || null, // 수정 시 pageId 전달, 신규 생성 시 null
+          properties: buildNotionProperties(), // 기존에 작성하신 속성 생성 함수
+        }),
       });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
-      if (!isUpdate && data.id) setCurrentPageId(data.id);
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "동기화 실패");
+      }
+      setCurrentPageId(data.pageId);
       setNotionStatus({ state: "ok", msg: isUpdate ? "노션 페이지를 갱신했어." : "노션에 새 탐사자로 저장했어." });
       addLog("노션 동기화", isUpdate ? "기존 탐사자 정보를 갱신함" : "새 탐사자로 노션에 저장함", true);
     } catch (e) {

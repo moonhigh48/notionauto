@@ -38,6 +38,36 @@ const AGE_TABLE = [
   { min: 80, max: 89, eduChecks: 4, statReduce: { points: 80, options: ["STR", "CON", "DEX"] }, appReduce: 25 },
 ];
 
+// 직업 프리셋: 자주 쓰이는 크툴루 7판 직업들을 간략화해 재구성한 참고용 데이터.
+// formula(attrs)는 직업 기능 점수 계산식, skills는 자동 체크될 직업 기능 이름(기본 기능표 이름과 일치해야 함).
+const OCCUPATIONS = [
+  { name: "사립탐정", formula: (a) => a.EDU * 2 + a.DEX * 2, formulaLabel: "EDU×2 + DEX×2", skills: ["관찰력", "법률", "은밀행동", "심리학", "사격(권총)", "자료조사", "위협", "설득"] },
+  { name: "의사", formula: (a) => a.EDU * 4, formulaLabel: "EDU×4", skills: ["의료", "응급처치", "심리학", "자료조사", "설득", "언어(모국어)", "인류학", "회계"] },
+  { name: "기자", formula: (a) => a.EDU * 2 + a.APP * 2, formulaLabel: "EDU×2 + APP×2", skills: ["자료조사", "역사", "손놀림", "말재주", "설득", "심리학", "자동차 운전", "언어(모국어)"] },
+  { name: "교수", formula: (a) => a.EDU * 4, formulaLabel: "EDU×4", skills: ["역사", "고고학", "자료조사", "언어(모국어)", "오컬트", "인류학", "회계", "설득"] },
+  { name: "경찰관", formula: (a) => a.EDU * 2 + a.STR * 2, formulaLabel: "EDU×2 + STR×2", skills: ["사격(권총)", "사격(라이플/산탄총)", "근접전(격투)", "관찰력", "법률", "심리학", "자동차 운전", "추적"] },
+  { name: "골동품상", formula: (a) => a.EDU * 2 + a.APP * 2, formulaLabel: "EDU×2 + APP×2", skills: ["역사", "감정", "자료조사", "회계", "말재주", "설득", "언어(모국어)", "오컬트"] },
+  { name: "군인", formula: (a) => a.EDU * 2 + a.STR * 2, formulaLabel: "EDU×2 + STR×2", skills: ["사격(라이플/산탄총)", "근접전(격투)", "응급처치", "항법", "전기수리", "기계수리", "추적", "오르기"] },
+  { name: "범죄자", formula: (a) => a.DEX * 2 + a.APP * 2, formulaLabel: "DEX×2 + APP×2", skills: ["은밀행동", "손놀림", "열쇠공", "변장", "위협", "자료조사", "회계", "법률"] },
+  { name: "부유한 방랑자", formula: (a) => a.EDU * 2 + a.APP * 2, formulaLabel: "EDU×2 + APP×2", skills: ["감정", "말재주", "매혹", "승마", "법률", "회계", "자료조사", "언어(모국어)"] },
+  { name: "선원", formula: (a) => a.DEX * 2 + a.STR * 2, formulaLabel: "DEX×2 + STR×2", skills: ["항법", "수영", "기계수리", "전기수리", "응급처치", "자연", "오르기", "투척"] },
+  { name: "오컬티스트", formula: (a) => a.EDU * 2 + a.POW * 2, formulaLabel: "EDU×2 + POW×2", skills: ["오컬트", "크툴루 신화", "자료조사", "역사", "인류학", "심리학", "언어(모국어)", "매혹"] },
+];
+
+// 노션 동기화용: 캐릭터 페이지를 만들려면 대상 데이터베이스에 미리 준비돼 있어야 하는 속성 목록.
+// (빈 데이터베이스로는 값 매핑이 불가능 — Notion API는 스키마에 없는 속성엔 값을 못 넣음)
+const NOTION_REQUIRED_PROPS = [
+  { name: "이름", type: "제목(Title)", note: "데이터베이스 기본 제목 속성. 이름이 다르면 아래 설정에서 바꿔줘." },
+  { name: "직업", type: "텍스트" },
+  { name: "나이", type: "숫자" },
+  { name: "HP", type: "숫자" },
+  { name: "MP", type: "숫자" },
+  { name: "SAN", type: "숫자" },
+  { name: "특성치", type: "텍스트", note: "특성치 전체를 JSON 문자열로 저장" },
+  { name: "기능치", type: "텍스트", note: "기능치+메모 전체를 JSON 문자열로 저장" },
+  { name: "최종 동기화", type: "날짜" },
+];
+
 function labelOf(key) {
   const d = ATTR_DEFS.find((a) => a.key === key);
   return d ? d.name : key;
@@ -90,6 +120,7 @@ export default function CoCCharacterSheet() {
       special: s[1] === "EDU" || s[1] === "DEX/2",
       checked: false,
       alloc: 0,
+      memo: "",
       custom: false,
     })),
   }).current;
@@ -119,6 +150,18 @@ export default function CoCCharacterSheet() {
   const [notation, setNotation] = useState("1d100");
   const [log, setLog] = useState([]);
   const busyRef = useRef(false);
+
+  // 기능 메모 (어느 기능의 메모창이 열려있는지)
+  const [openMemoIds, setOpenMemoIds] = useState({});
+
+  // 직업 프리셋
+  const [occPreset, setOccPreset] = useState("");
+
+  // 노션 연동
+  const [notion, setNotion] = useState({ apiKey: "", databaseId: "", titleProp: "이름" });
+  const [notionOpen, setNotionOpen] = useState(false);
+  const [notionReqOpen, setNotionReqOpen] = useState(false);
+  const [notionStatus, setNotionStatus] = useState({ state: "idle", msg: "" }); // idle | busy | ok | error
 
   function addLog(label, resultOrText, isEvent) {
     setLog((prev) => [
@@ -343,9 +386,87 @@ export default function CoCCharacterSheet() {
       special: false,
       checked: false,
       alloc: 0,
+      memo: "",
       custom: true,
     });
     forceRender();
+  }
+  function setSkillMemo(id, value) {
+    const sk = store.skills.find((s) => s.id === id);
+    sk.memo = value;
+    forceRender();
+  }
+  function toggleMemoOpen(id) {
+    setOpenMemoIds((prev) => ({ ...prev, [id]: !prev[id] }));
+  }
+
+  /* ---------- occupation preset ---------- */
+
+  function applyOccupation(name) {
+    setOccPreset(name);
+    if (!name) return;
+    const occ = OCCUPATIONS.find((o) => o.name === name);
+    if (!occ) return;
+    store.skills.forEach((sk) => {
+      sk.checked = occ.skills.includes(sk.name);
+    });
+    const pts = occ.formula(store.attrs);
+    setPoolOcc(pts || 0);
+    setInfo((prev) => ({ ...prev, occupation: name }));
+    addLog("직업 프리셋 적용", `${name} · 직업 기능 점수 ${occ.formulaLabel} = ${pts}`, true);
+    forceRender();
+  }
+
+  /* ---------- notion sync ---------- */
+
+  function buildNotionProperties() {
+    const skillDump = store.skills
+      .filter((sk) => sk.checked || (parseInt(sk.alloc) || 0) > 0 || sk.memo)
+      .map((sk) => ({ 이름: sk.name, 직업기능: sk.checked, 합계: skillTotal(sk), 메모: sk.memo || "" }));
+    return {
+      [notion.titleProp || "이름"]: { title: [{ text: { content: info.name || "이름 없는 탐사자" } }] },
+      "직업": { rich_text: [{ text: { content: info.occupation || "" } }] },
+      "나이": { number: age || 0 },
+      "HP": { number: hpCur ?? hpMax },
+      "MP": { number: mpCur ?? mpMax },
+      "SAN": { number: sanCur ?? store.attrs.POW },
+      "특성치": { rich_text: [{ text: { content: JSON.stringify(store.attrs) } }] },
+      "기능치": { rich_text: [{ text: { content: JSON.stringify(skillDump).slice(0, 1900) } }] },
+      "최종 동기화": { date: { start: new Date().toISOString() } },
+    };
+  }
+
+  async function syncToNotion() {
+    if (!notion.apiKey || !notion.databaseId) {
+      setNotionStatus({ state: "error", msg: "연동 키와 데이터베이스 ID를 먼저 입력해줘." });
+      return;
+    }
+    setNotionStatus({ state: "busy", msg: "동기화 중…" });
+    try {
+      const res = await fetch("https://api.notion.com/v1/pages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${notion.apiKey}`,
+          "Notion-Version": "2022-06-28",
+        },
+        body: JSON.stringify({
+          parent: { database_id: notion.databaseId },
+          properties: buildNotionProperties(),
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.message || `HTTP ${res.status}`);
+      }
+      setNotionStatus({ state: "ok", msg: "노션에 저장했어." });
+      addLog("노션 동기화", "탐사자 정보를 노션 데이터베이스에 저장함", true);
+    } catch (e) {
+      setNotionStatus({
+        state: "error",
+        msg: `동기화 실패: ${e.message}. 브라우저에서 노션 API를 직접 호출하면 CORS 정책에 막힐 수 있어 — 그럴 땐 이 요청을 대신 전달해줄 작은 프록시 서버(Cloudflare Worker 등)가 필요해.`,
+      });
+    }
   }
 
   let occUsed = 0,
@@ -375,20 +496,98 @@ export default function CoCCharacterSheet() {
           100% { transform: rotate(360deg) scale(1); }
         }
         .coc-die-rolling { animation: coc-spin .25s linear infinite; }
+
+        /* 페이지 전체 드래그바(스크롤바) 커스텀 디자인 */
+        * { scrollbar-width: thin; scrollbar-color: #5c7a52 #12160f; }
+        *::-webkit-scrollbar { width: 9px; height: 9px; }
+        *::-webkit-scrollbar-track { background: #12160f; border-radius: 8px; }
+        *::-webkit-scrollbar-thumb {
+          background: linear-gradient(180deg, #8faa5c, #3e5638);
+          border-radius: 8px;
+          border: 2px solid #12160f;
+        }
+        *::-webkit-scrollbar-thumb:hover { background: #8faa5c; }
+
         .coc-log-list::-webkit-scrollbar { width: 6px; }
         .coc-log-list::-webkit-scrollbar-thumb { background: #3e5638; border-radius: 4px; }
+
+        @keyframes coc-log-in {
+          0% { opacity: 0; transform: translateY(-10px) scale(0.98); }
+          60% { opacity: 1; transform: translateY(1px) scale(1.005); }
+          100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .coc-log-entry-new { animation: coc-log-in .38s cubic-bezier(.2,.8,.3,1); }
+
+        .coc-notion-btn {
+          border: 1px solid rgba(143,170,92,0.45);
+          background: rgba(143,170,92,0.12);
+          color: #8faa5c;
+          font-family: monospace;
+          font-size: 10px;
+          letter-spacing: 0.05em;
+          padding: 4px 9px;
+          border-radius: 999px;
+          cursor: pointer;
+        }
+        .coc-notion-btn:hover { background: rgba(143,170,92,0.25); }
+
+        .coc-modal-overlay {
+          position: fixed; inset: 0; background: rgba(6,8,6,0.72);
+          display: flex; align-items: center; justify-content: center;
+          z-index: 50; padding: 20px; backdrop-filter: blur(2px);
+        }
+        .coc-modal {
+          width: min(520px, 100%);
+          max-height: 86vh;
+          overflow-y: auto;
+          background: linear-gradient(180deg, #e8e1c9, #dcd3b4);
+          color: #1c1a13;
+          border-radius: 8px;
+          box-shadow: 0 20px 60px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(20,20,15,0.08);
+          animation: coc-log-in .25s ease-out;
+        }
+        .coc-modal-head {
+          background: linear-gradient(180deg, #232823, #171c17);
+          color: #e8e1c9;
+          padding: 12px 16px;
+          display: flex; align-items: center; justify-content: space-between;
+          position: sticky; top: 0;
+        }
+        .coc-modal-body { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+        .coc-modal-close {
+          background: none; border: none; color: #e8e1c9; opacity: 0.6; cursor: pointer; font-size: 16px;
+        }
+        .coc-modal-close:hover { opacity: 1; }
+        .coc-req-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+        .coc-req-table th, .coc-req-table td {
+          border: 1px solid rgba(20,20,15,0.2); padding: 5px 7px; text-align: left;
+        }
+        .coc-req-table th { background: rgba(20,20,15,0.08); font-family: monospace; font-size: 10px; }
         .coc-skill-row {
           display: grid;
-          grid-template-columns: 20px 1fr 30px 44px 26px 26px 26px 20px;
+          grid-template-columns: 20px 1fr 30px 44px 26px 26px 26px 18px 20px;
           gap: 5px;
           align-items: center;
           padding: 4px 2px;
           border-bottom: 1px solid rgba(20,20,15,0.08);
           font-size: 11.5px;
         }
+        .coc-skill-memo {
+          width: 100%;
+          margin: 2px 0 4px;
+          padding: 5px 7px;
+          font-size: 11px;
+          font-family: Georgia, serif;
+          color: #1c1a13;
+          background: #fbf8ee;
+          border: 1px dashed rgba(122,49,49,0.4);
+          border-radius: 4px;
+          resize: vertical;
+          min-height: 40px;
+        }
         .coc-skill-header {
           display: grid;
-          grid-template-columns: 20px 1fr 30px 44px 26px 26px 26px 20px;
+          grid-template-columns: 20px 1fr 30px 44px 26px 26px 26px 18px 20px;
           gap: 5px;
           font-family: monospace;
           font-size: 9px;
@@ -419,7 +618,15 @@ export default function CoCCharacterSheet() {
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-5 items-start">
           <main className="flex flex-col gap-5">
             {/* Investigator info */}
-            <Card title="탐사자 정보" tag="INVESTIGATOR">
+            <Card
+              title="탐사자 정보"
+              tag="INVESTIGATOR"
+              action={
+                <button className="coc-notion-btn" onClick={() => setNotionOpen(true)}>
+                  ⚙ 노션 연동
+                </button>
+              }
+            >
               <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5">
                 <Field label="이름"><input className="coc-input" value={info.name} onChange={(e) => setInfo({ ...info, name: e.target.value })} /></Field>
                 <Field label="PL"><input className="coc-input" value={info.pl} onChange={(e) => setInfo({ ...info, pl: e.target.value })} /></Field>
@@ -427,6 +634,14 @@ export default function CoCCharacterSheet() {
                 <Field label="성별"><input className="coc-input" value={info.gender} onChange={(e) => setInfo({ ...info, gender: e.target.value })} /></Field>
                 <Field label="출생지"><input className="coc-input" value={info.birthplace} onChange={(e) => setInfo({ ...info, birthplace: e.target.value })} /></Field>
                 <Field label="거주지"><input className="coc-input" value={info.residence} onChange={(e) => setInfo({ ...info, residence: e.target.value })} /></Field>
+                <Field label="직업 프리셋 (선택 시 직업 기능 자동 체크 + 점수 계산)">
+                  <select className="coc-input" value={occPreset} onChange={(e) => applyOccupation(e.target.value)}>
+                    <option value="">— 직접 입력 —</option>
+                    {OCCUPATIONS.map((o) => (
+                      <option key={o.name} value={o.name}>{o.name} ({o.formulaLabel})</option>
+                    ))}
+                  </select>
+                </Field>
               </div>
             </Card>
 
@@ -543,7 +758,22 @@ export default function CoCCharacterSheet() {
             <Card title="탐사자 기능" tag="SKILLS">
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 mb-3.5">
                 <PoolBox label="직업 기능 점수"><input type="number" className="coc-pool-input" value={poolOcc} onChange={(e) => setPoolOcc(parseInt(e.target.value) || 0)} /></PoolBox>
-                <PoolBox label="관심 기능 점수"><input type="number" className="coc-pool-input" value={poolInt} onChange={(e) => setPoolInt(parseInt(e.target.value) || 0)} /></PoolBox>
+                <PoolBox label="관심 기능 점수">
+                  <div className="flex items-center gap-1.5">
+                    <input type="number" className="coc-pool-input" value={poolInt} onChange={(e) => setPoolInt(parseInt(e.target.value) || 0)} />
+                    <button
+                      className="coc-roll-btn-sm shrink-0"
+                      title="관심 기능 점수 = 지능(INT) × 2"
+                      onClick={() => {
+                        const v = store.attrs.INT * 2;
+                        setPoolInt(v);
+                        addLog("관심 기능 점수 계산", `INT×2 = ${v}`, true);
+                      }}
+                    >
+                      INT×2
+                    </button>
+                  </div>
+                </PoolBox>
                 <PoolBox label="성장치"><input type="number" className="coc-pool-input" value={poolGrowth} onChange={(e) => setPoolGrowth(parseInt(e.target.value) || 0)} /></PoolBox>
                 <div className={`rounded p-2 border border-black/20 text-[#1c1a13] ${remainOcc < 0 || remainInt < 0 ? "bg-[#7a3131]/15" : "bg-[#5c7a52]/12"}`}>
                   <label className="text-[10px] text-[#6b6b5e] block mb-1">잔여 점수 (직업 / 관심)</label>
@@ -567,28 +797,54 @@ export default function CoCCharacterSheet() {
                 {cols.map((col, ci) => (
                   <div key={ci} className="text-[#1c1a13]">
                     <div className="coc-skill-header">
-                      <span>직업</span><span>기능</span><span>기본</span><span>배분</span><span>합계</span><span>½</span><span>⅕</span><span></span>
+                      <span>직업</span><span>기능</span><span>기본</span><span>배분</span><span>합계</span><span>½</span><span>⅕</span><span></span><span></span>
                     </div>
                     {col.map((sk) => {
                       const base = skillBaseValue(sk);
                       const total = skillTotal(sk);
+                      const memoOpen = !!openMemoIds[sk.id];
                       return (
-                        <div className="coc-skill-row" key={sk.id}>
-                          <input type="checkbox" checked={sk.checked} onChange={() => toggleSkillChecked(sk.id)} style={{ accentColor: "#5c7a52", width: 14, height: 14 }} />
-                          <span className="whitespace-nowrap overflow-hidden text-ellipsis" title={sk.name}>{sk.name}</span>
-                          <span className="font-mono text-[10px] text-[#7a7a6a] text-right">{base}</span>
-                          <input
-                            type="number"
-                            className="w-full py-0.5 px-0.5 text-center border border-black/20 rounded bg-white text-[11px]"
-                            value={sk.alloc}
-                            onChange={(e) => setSkillAlloc(sk.id, e.target.value)}
-                          />
-                          <span className="text-center font-mono text-[10.5px] bg-[#f1ecda] rounded py-0.5 font-bold">{total}</span>
-                          <span className="text-center font-mono text-[10.5px] bg-[#f1ecda] rounded py-0.5">{Math.floor(total / 2)}</span>
-                          <span className="text-center font-mono text-[10.5px] bg-[#f1ecda] rounded py-0.5">{Math.floor(total / 5)}</span>
-                          <span className="text-center text-[12px] text-[#7a3131] opacity-50 cursor-pointer hover:opacity-100" onClick={() => sk.custom && removeSkill(sk.id)}>
-                            {sk.custom ? "✕" : ""}
-                          </span>
+                        <div key={sk.id}>
+                          <div className="coc-skill-row">
+                            <input type="checkbox" checked={sk.checked} onChange={() => toggleSkillChecked(sk.id)} style={{ accentColor: "#5c7a52", width: 14, height: 14 }} />
+                            <span className="whitespace-nowrap overflow-hidden text-ellipsis" title={sk.name}>{sk.name}</span>
+                            <span className="font-mono text-[10px] text-[#7a7a6a] text-right">{base}</span>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              maxLength={3}
+                              className="w-full py-0.5 px-0.5 text-center border border-black/20 rounded bg-white text-[11px]"
+                              value={sk.alloc}
+                              onChange={(e) => {
+                                const raw = e.target.value.replace(/[^0-9]/g, "");
+                                setSkillAlloc(sk.id, raw);
+                                if (raw.length >= 2) e.target.blur();
+                              }}
+                            />
+                            <span className="text-center font-mono text-[10.5px] bg-[#f1ecda] rounded py-0.5 font-bold">{total}</span>
+                            <span className="text-center font-mono text-[10.5px] bg-[#f1ecda] rounded py-0.5">{Math.floor(total / 2)}</span>
+                            <span className="text-center font-mono text-[10.5px] bg-[#f1ecda] rounded py-0.5">{Math.floor(total / 5)}</span>
+                            <span
+                              className="text-center text-[12px] cursor-pointer hover:opacity-100"
+                              style={{ opacity: sk.memo ? 1 : 0.35, color: sk.memo ? "#7a3131" : "#5b5b4f" }}
+                              title="기능 메모"
+                              onClick={() => toggleMemoOpen(sk.id)}
+                            >
+                              📝
+                            </span>
+                            <span className="text-center text-[12px] text-[#7a3131] opacity-50 cursor-pointer hover:opacity-100" onClick={() => sk.custom && removeSkill(sk.id)}>
+                              {sk.custom ? "✕" : ""}
+                            </span>
+                          </div>
+                          {memoOpen && (
+                            <textarea
+                              className="coc-skill-memo"
+                              placeholder={`${sk.name} 메모 (판정 결과, 습득 경위 등)`}
+                              value={sk.memo}
+                              onChange={(e) => setSkillMemo(sk.id, e.target.value)}
+                            />
+                          )}
                         </div>
                       );
                     })}
@@ -597,7 +853,7 @@ export default function CoCCharacterSheet() {
               </div>
               <div className="text-[11px] text-[#5b5b4f] leading-relaxed mt-1.5">
                 ☑ 체크 = 직업 기능 · 미체크 = 관심 기능. 배분 칸에 추가로 넣을 점수를 입력하면 <b className="text-[#7a3131]">합계</b>가 자동 계산돼.
-                언어(모국어)는 교육치, 회피는 민첩성/2 를 기본치로 자동 반영해.
+                언어(모국어)는 교육치, 회피는 민첩성/2 를 기본치로 자동 반영해. 📝 아이콘을 눌러 기능별 메모를 남길 수 있어.
               </div>
             </Card>
           </main>
@@ -644,12 +900,12 @@ export default function CoCCharacterSheet() {
 
             <div className="rounded-md bg-gradient-to-b from-[#171c17] to-[#0e120e] p-4 max-h-[520px] flex flex-col" style={{ boxShadow: "0 10px 30px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(143,170,92,0.1)" }}>
               <h3 className="font-serif text-sm text-[#8faa5c] mb-2.5 tracking-wide">기록</h3>
-              <div className="coc-log-list overflow-y-auto flex flex-col-reverse gap-2 pr-1">
+              <div className="coc-log-list overflow-y-auto flex flex-col gap-2 pr-1">
                 {log.length === 0 && <div className="text-[#e8e1c9]/35 text-xs text-center py-5 font-mono">아직 굴려진 주사위가 없다…</div>}
-                {[...log].reverse().map((entry) => (
+                {[...log].reverse().map((entry, idx) => (
                   <div
                     key={entry.id}
-                    className="rounded-r px-2.5 py-1.5 text-xs"
+                    className={`rounded-r px-2.5 py-1.5 text-xs ${idx === 0 ? "coc-log-entry-new" : ""}`}
                     style={{ borderLeft: `2px solid ${entry.isEvent ? "#7a3131" : "#5c7a52"}`, background: "rgba(232,225,201,0.04)" }}
                   >
                     <div className="flex justify-between font-mono text-[10px] mb-0.5" style={{ color: entry.isEvent ? "#a84343" : "#8faa5c" }}>
@@ -671,6 +927,108 @@ export default function CoCCharacterSheet() {
           m D n = m번, n면체 주사위 · 1d100은 십의 자리·일의 자리 십면체 두 개로 처리됨
         </div>
       </div>
+
+      {notionOpen && (
+        <div className="coc-modal-overlay" onClick={() => setNotionOpen(false)}>
+          <div className="coc-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="coc-modal-head">
+              <span className="font-serif text-sm tracking-wide">노션 연동 설정</span>
+              <button className="coc-modal-close" onClick={() => setNotionOpen(false)}>✕</button>
+            </div>
+            <div className="coc-modal-body">
+              <div className="text-[11.5px] leading-relaxed">
+                노션 데이터베이스를 이 시트의 외부 저장소로 사용해. 캐릭터 정보를 노션 페이지 하나로 저장하고,
+                필요할 때 다시 불러올 수 있어.{" "}
+                <span className="text-[#7a3131] font-bold cursor-pointer underline" onClick={() => setNotionReqOpen(true)}>
+                  → 데이터베이스 필수 요건 보기
+                </span>
+              </div>
+              <Field label="노션 연동(Integration) 키">
+                <input
+                  className="coc-input"
+                  type="password"
+                  placeholder="secret_..."
+                  value={notion.apiKey}
+                  onChange={(e) => setNotion({ ...notion, apiKey: e.target.value })}
+                />
+              </Field>
+              <Field label="데이터베이스 ID">
+                <input
+                  className="coc-input"
+                  placeholder="32자리 ID (데이터베이스 URL에서 확인)"
+                  value={notion.databaseId}
+                  onChange={(e) => setNotion({ ...notion, databaseId: e.target.value })}
+                />
+              </Field>
+              <Field label="제목(Title) 속성 이름">
+                <input
+                  className="coc-input"
+                  value={notion.titleProp}
+                  onChange={(e) => setNotion({ ...notion, titleProp: e.target.value })}
+                />
+              </Field>
+              <button className="coc-roll-btn" onClick={syncToNotion}>
+                {notionStatus.state === "busy" ? "동기화 중…" : "지금 노션에 저장"}
+              </button>
+              {notionStatus.msg && (
+                <div
+                  className="text-[11px] p-2 rounded"
+                  style={{
+                    background: notionStatus.state === "error" ? "rgba(122,49,49,0.12)" : "rgba(92,122,82,0.15)",
+                    color: notionStatus.state === "error" ? "#7a3131" : "#3e5638",
+                  }}
+                >
+                  {notionStatus.msg}
+                </div>
+              )}
+              <div className="text-[10.5px] text-[#5b5b4f] leading-relaxed">
+                참고: 이 시트가 별도 서버 없이 브라우저에서만 동작하는 경우, 노션 API 특유의 CORS 정책 때문에
+                직접 호출이 막힐 수 있어. 그럴 땐 이 저장 요청을 그대로 전달해주는 작은 프록시(예: Cloudflare
+                Worker, Vercel 서버리스 함수)를 하나 두면 해결돼.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {notionReqOpen && (
+        <div className="coc-modal-overlay" onClick={() => setNotionReqOpen(false)}>
+          <div className="coc-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="coc-modal-head">
+              <span className="font-serif text-sm tracking-wide">노션 데이터베이스 필수 요건</span>
+              <button className="coc-modal-close" onClick={() => setNotionReqOpen(false)}>✕</button>
+            </div>
+            <div className="coc-modal-body">
+              <div className="text-[11.5px] leading-relaxed">
+                <b>완전히 빈 데이터베이스로는 동기화가 안 돼.</b> 노션 API는 데이터베이스 스키마에 이미 존재하는
+                속성에만 값을 넣을 수 있어서, 아래 속성들을 미리 만들어 둬야 해. (제목 속성은 모든 데이터베이스에
+                기본으로 있으니 이름만 맞춰주면 돼.)
+              </div>
+              <table className="coc-req-table">
+                <thead>
+                  <tr><th>속성 이름</th><th>속성 유형</th><th>비고</th></tr>
+                </thead>
+                <tbody>
+                  {NOTION_REQUIRED_PROPS.map((p) => (
+                    <tr key={p.name}>
+                      <td className="font-mono">{p.name}</td>
+                      <td>{p.type}</td>
+                      <td className="text-[#5b5b4f]">{p.note || ""}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="text-[11px] text-[#5b5b4f] leading-relaxed">
+                이 연동(Integration)을 대상 데이터베이스에 "연결(Connect)"해두는 것도 잊지 마 — 노션 설정 화면
+                우측 상단 ⋯ 메뉴에서 연결할 수 있어.
+              </div>
+              <button className="coc-roll-btn" onClick={() => setNotionReqOpen(false)}>
+                확인했어
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style>{`
         .coc-input {
@@ -702,12 +1060,15 @@ export default function CoCCharacterSheet() {
 
 /* ===================== SMALL PIECES ===================== */
 
-function Card({ title, tag, children }) {
+function Card({ title, tag, action, children }) {
   return (
     <section className="rounded-md overflow-hidden" style={{ background: "linear-gradient(180deg, #e8e1c9, #dcd3b4)", boxShadow: "0 10px 30px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(20,20,15,0.08)" }}>
-      <div className="px-4 py-2.5 flex items-center justify-between" style={{ background: "linear-gradient(180deg, #232823, #171c17)", color: "#e8e1c9" }}>
+      <div className="px-4 py-2.5 flex items-center justify-between gap-2" style={{ background: "linear-gradient(180deg, #232823, #171c17)", color: "#e8e1c9" }}>
         <span className="font-serif text-[15px] tracking-wide">{title}</span>
-        <span className="font-mono text-[10px] text-[#8faa5c] tracking-widest opacity-85">{tag}</span>
+        <div className="flex items-center gap-2">
+          {action}
+          <span className="font-mono text-[10px] text-[#8faa5c] tracking-widest opacity-85">{tag}</span>
+        </div>
       </div>
       <div className="p-4">{children}</div>
     </section>

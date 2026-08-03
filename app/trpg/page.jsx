@@ -38,19 +38,102 @@ const AGE_TABLE = [
   { min: 80, max: 89, eduChecks: 4, statReduce: { points: 80, options: ["STR", "CON", "DEX"] }, appReduce: 25 },
 ];
 
-// 직업 프리셋: 자주 쓰이는 크툴루 7판 직업들을 간략화해 재구성한 참고용 데이터.
+const INTERPERSONAL_SKILLS = ["말재주", "매혹", "설득", "위협"];
+
+// 직업 리스트 (첨부해준 문서 기준으로 재구성).
+// skills 항목 표기법:
+//   "이름"                    -> 고정 기능 1개 (없으면 사용자 지정 기능으로 자동 생성)
+//   { and:[...] }             -> 나열된 기능 전부 필수
+//   { choice:[...], count }   -> 나열된 것 중 count개(기본 1개) 선택 (선택창 표시)
+//   { interpersonal: n }      -> 대인 관계 기능(말재주/매혹/설득/위협) 중 n개 선택
+//   { freeText: "안내문" }    -> 직접 기능 이름을 입력 (예술/공예 등 '선택' 항목)
 const OCCUPATIONS = [
-  { name: "사립탐정", formula: (a) => a.EDU * 2 + a.DEX * 2, formulaLabel: "EDU×2 + DEX×2", skills: ["관찰력", "법률", "은밀행동", "심리학", "사격(권총)", "자료조사", "위협", "설득"] },
-  { name: "의사", formula: (a) => a.EDU * 4, formulaLabel: "EDU×4", skills: ["의료", "응급처치", "심리학", "자료조사", "설득", "언어(모국어)", "인류학", "회계"] },
-  { name: "기자", formula: (a) => a.EDU * 2 + a.APP * 2, formulaLabel: "EDU×2 + APP×2", skills: ["자료조사", "역사", "손놀림", "말재주", "설득", "심리학", "자동차 운전", "언어(모국어)"] },
-  { name: "교수", formula: (a) => a.EDU * 4, formulaLabel: "EDU×4", skills: ["역사", "고고학", "자료조사", "언어(모국어)", "오컬트", "인류학", "회계", "설득"] },
-  { name: "경찰관", formula: (a) => a.EDU * 2 + a.STR * 2, formulaLabel: "EDU×2 + STR×2", skills: ["사격(권총)", "사격(라이플/산탄총)", "근접전(격투)", "관찰력", "법률", "심리학", "자동차 운전", "추적"] },
-  { name: "골동품상", formula: (a) => a.EDU * 2 + a.APP * 2, formulaLabel: "EDU×2 + APP×2", skills: ["역사", "감정", "자료조사", "회계", "말재주", "설득", "언어(모국어)", "오컬트"] },
-  { name: "군인", formula: (a) => a.EDU * 2 + a.STR * 2, formulaLabel: "EDU×2 + STR×2", skills: ["사격(라이플/산탄총)", "근접전(격투)", "응급처치", "항법", "전기수리", "기계수리", "추적", "오르기"] },
-  { name: "범죄자", formula: (a) => a.DEX * 2 + a.APP * 2, formulaLabel: "DEX×2 + APP×2", skills: ["은밀행동", "손놀림", "열쇠공", "변장", "위협", "자료조사", "회계", "법률"] },
-  { name: "부유한 방랑자", formula: (a) => a.EDU * 2 + a.APP * 2, formulaLabel: "EDU×2 + APP×2", skills: ["감정", "말재주", "매혹", "승마", "법률", "회계", "자료조사", "언어(모국어)"] },
-  { name: "선원", formula: (a) => a.DEX * 2 + a.STR * 2, formulaLabel: "DEX×2 + STR×2", skills: ["항법", "수영", "기계수리", "전기수리", "응급처치", "자연", "오르기", "투척"] },
-  { name: "오컬티스트", formula: (a) => a.EDU * 2 + a.POW * 2, formulaLabel: "EDU×2 + POW×2", skills: ["오컬트", "크툴루 신화", "자료조사", "역사", "인류학", "심리학", "언어(모국어)", "매혹"] },
+  {
+    name: "간호사", formula: (a) => a.EDU * 4, formulaLabel: "교육×4", wealth: [9, 30],
+    skills: [{ and: ["과학(생물학)", "과학(화학)"] }, "관찰력", { interpersonal: 1 }, "듣기", "심리학", "응급처치", "의료"],
+  },
+  {
+    name: "고고학자", formula: (a) => a.EDU * 4, formulaLabel: "교육×4", wealth: [10, 40],
+    skills: ["감정", "고고학", { choice: ["과학(물리학)", "과학(지질학)", "과학(화학)", "항법"], label: "과학 분야 또는 항법 중 하나 선택" }, "관찰력", "기계수리", "언어(외국어)", "역사", "자료조사"],
+  },
+  {
+    name: "골동품 연구가", formula: (a) => a.EDU * 4, formulaLabel: "교육×4", wealth: [30, 70],
+    skills: ["감정", "관찰력", { interpersonal: 1 }, "언어(외국어)", "역사", { freeText: "예술/공예 분야를 입력해줘 (예: 회화, 도자기 등)" }, "자료조사"],
+  },
+  {
+    name: "교수", formula: (a) => a.EDU * 4, formulaLabel: "교육×4", wealth: [20, 70],
+    skills: ["심리학", "언어(모국어)", "언어(외국어)", "자료조사"],
+  },
+  {
+    name: "기자", formula: (a) => a.EDU * 4, formulaLabel: "교육×4", wealth: [9, 30],
+    subs: [
+      { name: "탐사기자", skills: [{ interpersonal: 1 }, "심리학", "언어(모국어)", "역사", { choice: ["예술/공예(미술)", "예술/공예(사진)"], label: "예술/공예: 미술 또는 사진" }, "자료조사"] },
+      { name: "리포터", skills: ["관찰력", { interpersonal: 1 }, "듣기", "심리학", "언어(모국어)", "역사", "예술/공예(연기)", "은밀행동"] },
+    ],
+  },
+  {
+    name: "딜레탕트", formula: (a) => a.EDU * 2 + a.APP * 2, formulaLabel: "교육×2+외모×2", wealth: [50, 99],
+    skills: [{ interpersonal: 1 }, { choice: ["사격(권총)", "사격(라이플/산탄총)"], label: "사격 종류 선택" }, "승마", "언어(외국어)", { freeText: "예술/공예 분야를 입력해줘 (예: 회화, 조각 등)" }],
+  },
+  {
+    name: "범죄자",
+    subs: [
+      {
+        name: "건달", formula: (a) => a.EDU * 2 + Math.max(a.STR, a.DEX) * 2, formulaLabel: "교육×2+(근력×2 또는 민첩성×2)", wealth: [3, 10],
+        skills: ["근접전(격투)", { interpersonal: 1 }, "도약", { choice: ["사격(권총)", "사격(라이플/산탄총)"], label: "사격 종류 선택" }, "손놀림", "오르기", "은밀행동", "투척"],
+      },
+      {
+        name: "건 몰 (고전)", formula: (a) => a.EDU * 2 + a.APP * 2, formulaLabel: "교육×2+외모×2", wealth: [10, 80],
+        skills: [{ choice: ["근접전(격투)", "사격(권총)"], label: "근접전(격투) 또는 사격(권총)" }, { interpersonal: 2 }, "듣기", { freeText: "예술/공예 분야를 입력해줘" }, "은밀행동", "자동차 운전"],
+      },
+      {
+        name: "단독/프리랜스 범죄자", formula: (a) => a.EDU * 2 + Math.max(a.DEX, a.APP) * 2, formulaLabel: "교육×2+(민첩성×2 또는 외모×2)", wealth: [5, 65],
+        skills: ["감정", "관찰력", { choice: ["근접전(격투)", "사격(권총)", "사격(라이플/산탄총)"], label: "근접전 또는 사격 종류 선택" }, { choice: ["기계수리", "열쇠공"], label: "기계수리 또는 열쇠공" }, { interpersonal: 1 }, { choice: ["변장", "예술/공예(연기)"], label: "변장 또는 예술/공예(연기)" }, "심리학", "은밀행동"],
+      },
+      {
+        name: "도둑", formula: (a) => a.EDU * 2 + a.DEX * 2, formulaLabel: "교육×2+민첩성×2", wealth: [5, 40],
+        skills: ["감정", "관찰력", { choice: ["기계수리", "전기수리"], label: "기계수리 또는 전기수리" }, "듣기", "손놀림", "열쇠공", "오르기", "은밀행동"],
+      },
+    ],
+  },
+  {
+    name: "사서", formula: (a) => a.EDU * 4, formulaLabel: "교육×4", wealth: [9, 35],
+    skills: ["언어(모국어)", "언어(외국어)", "자료조사", "회계"],
+  },
+  {
+    name: "신비학자", formula: (a) => a.EDU * 4, formulaLabel: "교육×4", wealth: [9, 65],
+    skills: ["과학(천문학)", { interpersonal: 1 }, "언어(외국어)", "역사", "오컬트", "인류학", "자료조사"],
+    note: "수호자가 동의하면 크툴루 신화를 선택할 수 있으나 최대 수치는 10%로 제한돼.",
+  },
+  {
+    name: "의사", formula: (a) => a.EDU * 4, formulaLabel: "교육×4", wealth: [30, 80],
+    skills: [{ and: ["과학(생물학)", "과학(약학)"] }, "심리학", "언어(라틴어)", "응급처치", "의료"],
+  },
+  {
+    name: "인부", formula: (a) => a.EDU * 2 + Math.max(a.STR, a.DEX) * 2, formulaLabel: "교육×2+(근력×2 또는 민첩성×2)", wealth: [9, 30],
+    subs: [
+      { name: "광부", skills: ["과학(지질학)", "관찰력", "기계수리", "도약", "오르기", "은밀행동", "중장비 조작"] },
+      { name: "벌목꾼", skills: [{ choice: ["과학(생물학)", "과학(식물학)", "자연"], label: "과학(생물학/식물학) 또는 자연 중 선택" }, "근접전(동력톱)", "기계수리", "도약", "오르기", "응급처치", "투척", "회피"] },
+      { name: "비숙련공", skills: ["근접전(격투)", "기계수리", "응급처치", "자동차 운전", "전기수리", "중장비 조작", "투척"] },
+    ],
+  },
+  {
+    name: "작가", formula: (a) => a.EDU * 4, formulaLabel: "교육×4", wealth: [9, 30],
+    skills: ["심리학", "언어(모국어)", "언어(외국어)", "역사", "예술/공예(문학)", { choice: ["오컬트", "자연"], label: "오컬트 또는 자연" }, "자료조사"],
+  },
+  {
+    name: "형사/경관", formula: (a) => a.EDU * 2 + Math.max(a.STR, a.DEX) * 2, formulaLabel: "교육×2+(근력×2 또는 민첩성×2)",
+    subs: [
+      {
+        name: "형사", wealth: [20, 50],
+        skills: ["관찰력", { interpersonal: 1 }, "듣기", { choice: ["사격(권총)", "사격(라이플/산탄총)"], label: "사격 종류 선택" }, "법률", { choice: ["변장", "예술/공예(연기)"], label: "변장 또는 예술/공예(연기)" }, "심리학"],
+      },
+      {
+        name: "경관", wealth: [9, 30],
+        skills: ["관찰력", "근접전(격투)", { interpersonal: 1 }, "법률", { choice: ["사격(권총)", "사격(라이플/산탄총)"], label: "사격 종류 선택" }, "심리학", "응급처치", { choice: ["승마", "자동차 운전"], label: "승마 또는 자동차 운전" }],
+      },
+    ],
+  },
 ];
 
 // 노션 동기화: 대상 데이터베이스에 미리 준비돼 있어야 하는 속성 목록.
@@ -146,9 +229,11 @@ export default function CoCCharacterSheet() {
   const [openMemoIds, setOpenMemoIds] = useState({});
   const [mode, setMode] = useState("create"); // "create" | "growth"
   const [improvingSkillId, setImprovingSkillId] = useState(null);
-  const [occPreset, setOccPreset] = useState("");
+  const [occParentName, setOccParentName] = useState("");
+  const [occSubName, setOccSubName] = useState("");
+  const [choiceModal, setChoiceModal] = useState(null); // { title, options, count, picked, resolve }
 
-  const [notion, setNotion] = useState({ workerUrl: "", databaseId: "", titleProp: "이름" });
+  const [notion, setNotion] = useState({ workerUrl: "/api/notion", databaseId: "", titleProp: "이름" });
   const [notionOpen, setNotionOpen] = useState(false);
   const [notionReqOpen, setNotionReqOpen] = useState(false);
   const [notionStatus, setNotionStatus] = useState({ state: "idle", msg: "" });
@@ -419,18 +504,113 @@ export default function CoCCharacterSheet() {
 
   /* ---------- occupation preset ---------- */
 
-  function applyOccupation(name) {
-    setOccPreset(name);
-    if (!name) return;
-    const occ = OCCUPATIONS.find((o) => o.name === name);
-    if (!occ) return;
-    store.skills.forEach((sk) => {
-      sk.checked = occ.skills.includes(sk.name);
+  function ensureSkillExists(name) {
+    let sk = store.skills.find((s) => s.name === name);
+    if (!sk) {
+      sk = { id: "occ-" + Date.now() + "-" + Math.random().toString(36).slice(2), name, base: 0, special: false, checked: false, alloc: 0, growth: 0, memo: "", custom: true };
+      store.skills.push(sk);
+    }
+    return sk;
+  }
+
+  function askChoice(title, options, count) {
+    return new Promise((resolve) => {
+      setChoiceModal({ title, options, count: count || 1, picked: [], resolve });
     });
-    const pts = occ.formula(store.attrs);
+  }
+
+  function toggleChoicePick(name) {
+    setChoiceModal((prev) => {
+      if (!prev) return prev;
+      let picked;
+      if (prev.picked.includes(name)) {
+        picked = prev.picked.filter((n) => n !== name);
+      } else if (prev.picked.length < prev.count) {
+        picked = [...prev.picked, name];
+      } else {
+        picked = prev.picked;
+      }
+      return { ...prev, picked };
+    });
+  }
+
+  function confirmChoice() {
+    setChoiceModal((prev) => {
+      if (!prev || prev.picked.length !== prev.count) return prev;
+      prev.resolve(prev.picked);
+      return null;
+    });
+  }
+
+  function skipChoice() {
+    setChoiceModal((prev) => {
+      if (!prev) return prev;
+      prev.resolve([]);
+      return null;
+    });
+  }
+
+  async function resolveSkillEntries(entries) {
+    const names = [];
+    for (const entry of entries || []) {
+      if (typeof entry === "string") {
+        names.push(entry);
+      } else if (entry.and) {
+        names.push(...entry.and);
+      } else if (entry.choice) {
+        const picked = await askChoice(entry.label || "기능 선택", entry.choice, entry.count || 1);
+        names.push(...picked);
+      } else if (entry.interpersonal) {
+        const picked = await askChoice("대인 관계 기능 선택", INTERPERSONAL_SKILLS, entry.interpersonal);
+        names.push(...picked);
+      } else if (entry.freeText) {
+        const typed = window.prompt(entry.freeText);
+        if (typed && typed.trim()) names.push(typed.trim());
+      }
+    }
+    return names;
+  }
+
+  async function applyOccupation(parentName, subName) {
+    setOccParentName(parentName);
+    if (!parentName) {
+      setOccSubName("");
+      return;
+    }
+    const occ = OCCUPATIONS.find((o) => o.name === parentName);
+    if (!occ) return;
+
+    if (occ.subs) {
+      setOccSubName(subName || "");
+      if (!subName) return; // 세부 직업 선택 대기
+    }
+
+    const sub = occ.subs ? occ.subs.find((s) => s.name === subName) : null;
+    const def = sub ? { ...occ, ...sub } : occ;
+    const label = sub ? `${occ.name} · ${sub.name}` : occ.name;
+
+    const names = await resolveSkillEntries(def.skills);
+
+    store.skills.forEach((sk) => {
+      sk.checked = false;
+    });
+    names.slice(0, 8).forEach((n) => {
+      ensureSkillExists(n).checked = true;
+    });
+
+    const pts = def.formula ? def.formula(store.attrs) : 0;
     setPoolOcc(pts || 0);
-    setInfo((prev) => ({ ...prev, occupation: name }));
-    addLog("직업 프리셋 적용", `${name} · 직업 기능 점수 ${occ.formulaLabel} = ${pts}`, true);
+    // 관심 기능 점수는 직업과 무관하게 항상 교육×2
+    setPoolInt(store.attrs.EDU * 2);
+    setInfo((prev) => ({ ...prev, occupation: label }));
+
+    let detail = `${label} · 직업 기능 점수 ${def.formulaLabel || ""} = ${pts} · 관심 기능 점수(교육×2) = ${store.attrs.EDU * 2}`;
+    if (def.wealth) {
+      ensureSkillExists("재력").alloc = def.wealth[0];
+      detail += ` · 재력 범위 ${def.wealth[0]}~${def.wealth[1]} (일단 최소값 적용, 범위 내에서 직접 조정해줘)`;
+    }
+    addLog("직업 프리셋 적용", detail, true);
+    if (occ.note) addLog("참고", occ.note, true);
     forceRender();
   }
 
@@ -459,7 +639,7 @@ export default function CoCCharacterSheet() {
 
   async function syncToNotion() {
     if (!notion.workerUrl || !notion.databaseId) {
-      setNotionStatus({ state: "error", msg: "Worker URL과 데이터베이스 ID를 먼저 입력해줘." });
+      setNotionStatus({ state: "error", msg: "API 프록시 주소와 데이터베이스 ID를 먼저 입력해줘." });
       return;
     }
     setNotionStatus({ state: "busy", msg: "동기화 중…" });
@@ -496,7 +676,7 @@ export default function CoCCharacterSheet() {
 
   async function loadNotionList() {
     if (!notion.workerUrl || !notion.databaseId) {
-      setBrowserError("먼저 ⚙ 노션 연동에서 Worker URL과 데이터베이스 ID를 설정해줘.");
+      setBrowserError("먼저 ⚙ 노션 연동에서 데이터베이스 ID를 설정해줘.");
       return;
     }
     setBrowserLoading(true);
@@ -595,6 +775,7 @@ export default function CoCCharacterSheet() {
   let occUsed = 0,
     intUsed = 0;
   store.skills.forEach((sk) => {
+    if (sk.name === "재력") return; // 재력은 별도 범위 배분이라 직업/관심 점수 풀에서 제외
     const a = parseInt(sk.alloc) || 0;
     if (sk.checked) occUsed += a;
     else intUsed += a;
@@ -880,24 +1061,39 @@ aside.dice-panel{
   color:var(--sick);text-align:center;
 }
 .dice-stage{
-  height:110px;
-  display:flex;align-items:center;justify-content:center;gap:14px;
+  height:120px;
+  display:flex;align-items:center;justify-content:center;gap:26px;
   margin-bottom:12px;
+  perspective:600px;
 }
-.die{
-  width:56px;height:56px;
+.die3d{
+  width:52px;height:52px;
+  position:relative;
+  transform-style:preserve-3d;
+  transform:rotateX(-18deg) rotateY(24deg);
+}
+.die3d .face{
+  position:absolute;inset:0;
+  width:52px;height:52px;
   background:linear-gradient(145deg,#f2ecd6,#c9c09a);
-  border-radius:10px;
+  border:1px solid rgba(20,20,15,0.35);
+  border-radius:8px;
   display:flex;align-items:center;justify-content:center;
-  font-family:var(--font-display);font-weight:bold;font-size:22px;color:var(--ink);
-  box-shadow:0 6px 14px rgba(0,0,0,0.5), inset 0 0 0 2px rgba(0,0,0,0.15);
-  transition:transform .08s linear;
+  font-family:var(--font-display);font-weight:bold;font-size:20px;color:var(--ink);
+  box-shadow:inset 0 0 10px rgba(0,0,0,0.18);
+  backface-visibility:hidden;
 }
-.die.rolling{animation:spin .25s linear infinite;}
-@keyframes spin{
-  0%{transform:rotate(0deg) scale(1);}
-  50%{transform:rotate(180deg) scale(1.08);}
-  100%{transform:rotate(360deg) scale(1);}
+.die3d .f-front{ transform:translateZ(26px); }
+.die3d .f-back{ transform:rotateY(180deg) translateZ(26px); }
+.die3d .f-right{ transform:rotateY(90deg) translateZ(26px); }
+.die3d .f-left{ transform:rotateY(-90deg) translateZ(26px); }
+.die3d .f-top{ transform:rotateX(90deg) translateZ(26px); }
+.die3d .f-bottom{ transform:rotateX(-90deg) translateZ(26px); }
+.die3d.rolling{ animation:die-tumble .55s linear infinite; }
+.die3d.landed{ transition:transform .5s cubic-bezier(.2,.8,.3,1); transform:rotateX(-18deg) rotateY(24deg); }
+@keyframes die-tumble{
+  0%{ transform:rotateX(0deg) rotateY(0deg) rotateZ(0deg); }
+  100%{ transform:rotateX(360deg) rotateY(720deg) rotateZ(180deg); }
 }
 .dice-input-row{display:flex;gap:8px;margin-bottom:8px;}
 .dice-input-row input{
@@ -1088,6 +1284,15 @@ aside.dice-panel{
 .skill-row .sroll.busy{ animation: spin .3s linear infinite; opacity:1; }
 .skill-row .sroll.disabled{ opacity:0.2; pointer-events:none; }
 
+/* ---- 직업 기능 선택창 ---- */
+.choice-grid{ display:flex; flex-wrap:wrap; gap:7px; }
+.choice-pill{
+  border:1px solid rgba(20,20,15,0.3); background:#fbf8ee; color:var(--ink);
+  font-size:12px; padding:6px 12px; border-radius:20px; cursor:pointer;
+}
+.choice-pill.picked{ background:var(--moss); border-color:var(--moss); color:#f6f3e6; font-weight:bold; }
+.roll-btn:disabled{ opacity:0.4; cursor:not-allowed; }
+
       `}</style>
 
       <div className="masthead">
@@ -1123,12 +1328,22 @@ aside.dice-panel{
               <Field label="출생지"><input type="text" value={info.birthplace} onChange={(e) => setInfo({ ...info, birthplace: e.target.value })} /></Field>
               <Field label="거주지"><input type="text" value={info.residence} onChange={(e) => setInfo({ ...info, residence: e.target.value })} /></Field>
               <Field className="wide" label="직업 프리셋 (선택 시 직업 기능 자동 체크 + 점수 계산)">
-                <select value={occPreset} onChange={(e) => applyOccupation(e.target.value)}>
-                  <option value="">— 직접 입력 —</option>
-                  {OCCUPATIONS.map((o) => (
-                    <option key={o.name} value={o.name}>{o.name} ({o.formulaLabel})</option>
-                  ))}
-                </select>
+                <div className="row-inline" style={{ gap: 8, flexWrap: "nowrap" }}>
+                  <select style={{ flex: 1 }} value={occParentName} onChange={(e) => applyOccupation(e.target.value, "")}>
+                    <option value="">— 직접 입력 —</option>
+                    {OCCUPATIONS.map((o) => (
+                      <option key={o.name} value={o.name}>{o.name}{o.formulaLabel ? ` (${o.formulaLabel})` : ""}</option>
+                    ))}
+                  </select>
+                  {occParentName && OCCUPATIONS.find((o) => o.name === occParentName)?.subs && (
+                    <select style={{ flex: 1 }} value={occSubName} onChange={(e) => applyOccupation(occParentName, e.target.value)}>
+                      <option value="">— 세부 직업 선택 —</option>
+                      {OCCUPATIONS.find((o) => o.name === occParentName).subs.map((s) => (
+                        <option key={s.name} value={s.name}>{s.name}{s.formulaLabel ? ` (${s.formulaLabel})` : ""}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
               </Field>
             </div>
           </Card>
@@ -1257,14 +1472,14 @@ aside.dice-panel{
                   <button
                     className="roll-btn small"
                     style={{ flexShrink: 0 }}
-                    title="관심 기능 점수 = 지능(INT) × 2"
+                    title="관심 기능 점수 = 교육(EDU) × 2"
                     onClick={() => {
-                      const v = store.attrs.INT * 2;
+                      const v = store.attrs.EDU * 2;
                       setPoolInt(v);
-                      addLog("관심 기능 점수 계산", `INT×2 = ${v}`, true);
+                      addLog("관심 기능 점수 계산", `교육×2 = ${v}`, true);
                     }}
                   >
-                    INT×2
+                    교육×2
                   </button>
                 </div>
               </div>
@@ -1361,7 +1576,11 @@ aside.dice-panel{
             <div className="dice-stage">
               {diceStage.dice.length === 0 && <span style={{ color: "rgba(143,170,92,0.3)", fontFamily: "var(--font-mono)", fontSize: 12 }}>— 대기 중 —</span>}
               {diceStage.dice.map((v, i) => (
-                <div key={i} className={`die${diceStage.rolling ? " rolling" : ""}`}>{v}</div>
+                <div key={i} className={`die3d${diceStage.rolling ? " rolling" : " landed"}`}>
+                  {["front", "back", "right", "left", "top", "bottom"].map((f) => (
+                    <div key={f} className={`face f-${f}`}>{v}</div>
+                  ))}
+                </div>
               ))}
             </div>
             <div className="dice-input-row">
@@ -1406,12 +1625,12 @@ aside.dice-panel{
             </div>
             <div className="modal-body">
               <div>
-                노션 데이터베이스를 이 시트의 외부 저장소로 사용해. Cloudflare Worker가 대신 노션 API를 호출해주기 때문에
-                브라우저에 연동 키를 넣을 필요가 없어 — Worker에 안전하게 보관돼 있어.{" "}
+                노션 데이터베이스를 이 시트의 외부 저장소로 사용해. 아래 API 프록시(서버)가 대신 노션 API를
+                호출해주기 때문에 브라우저에 연동 키를 넣을 필요가 없어 — 키는 서버에만 안전하게 보관돼.{" "}
                 <span className="modal-link" onClick={() => setNotionReqOpen(true)}>→ 데이터베이스 필수 요건 보기</span>
               </div>
-              <Field label="Cloudflare Worker URL">
-                <input placeholder="https://your-worker.your-subdomain.workers.dev" value={notion.workerUrl} onChange={(e) => setNotion({ ...notion, workerUrl: e.target.value })} />
+              <Field label="API 프록시 주소">
+                <input placeholder="/api/notion  또는  https://xxx.workers.dev" value={notion.workerUrl} onChange={(e) => setNotion({ ...notion, workerUrl: e.target.value })} />
               </Field>
               <Field label="데이터베이스 ID">
                 <input placeholder="32자리 ID (데이터베이스 URL에서 확인)" value={notion.databaseId} onChange={(e) => setNotion({ ...notion, databaseId: e.target.value })} />
@@ -1434,8 +1653,10 @@ aside.dice-panel{
                 <div className={`modal-status ${notionStatus.state === "error" ? "err" : "ok"}`}>{notionStatus.msg}</div>
               )}
               <div className="modal-hint">
-                Worker를 아직 배포하지 않았다면, 함께 받은 notion-proxy-worker 코드를 Cloudflare에 배포하고
-                <code> wrangler secret put NOTION_API_KEY</code> 로 노션 연동 키를 등록한 뒤, 배포된 Worker 주소를 위에 입력해줘.
+                기본값 <code>/api/notion</code>은 이 앱이 Vercel(Next.js)에 배포돼 있고, 함께 받은
+                <code> app/api/notion/[...path]/route.js</code>를 넣고 Vercel 환경변수에 <code>NOTION_API_KEY</code>를
+                등록했다는 전제로 동작해. 별도 서버 없이 정적으로만 호스팅한다면, 대신 Cloudflare Worker
+                (notion-proxy-worker 폴더)를 배포하고 그 주소를 여기 입력해줘.
               </div>
             </div>
           </div>
@@ -1479,7 +1700,7 @@ aside.dice-panel{
           {(!notion.workerUrl || !notion.databaseId) ? (
             <div className="modal-hint">
               먼저 <span className="modal-link" onClick={() => { setBrowserOpen(false); setNotionOpen(true); }}>⚙ 노션 연동</span>에서
-              Worker URL과 데이터베이스 ID를 설정해줘.
+              데이터베이스 ID를 설정해줘.
             </div>
           ) : (
             <>
@@ -1520,6 +1741,39 @@ aside.dice-panel{
           )}
         </div>
       </aside>
+
+      {choiceModal && (
+        <div className="modal-overlay" onClick={skipChoice}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-head">
+              <span>{choiceModal.title}</span>
+              <button className="modal-close" onClick={skipChoice}>✕</button>
+            </div>
+            <div className="modal-body">
+              <div className="modal-hint">
+                {choiceModal.count}개를 선택해줘 ({choiceModal.picked.length}/{choiceModal.count})
+              </div>
+              <div className="choice-grid">
+                {choiceModal.options.map((opt) => (
+                  <button
+                    key={opt}
+                    className={`choice-pill${choiceModal.picked.includes(opt) ? " picked" : ""}`}
+                    onClick={() => toggleChoicePick(opt)}
+                  >
+                    {opt}
+                  </button>
+                ))}
+              </div>
+              <div className="row-inline" style={{ gap: 8 }}>
+                <button className="roll-btn" disabled={choiceModal.picked.length !== choiceModal.count} onClick={confirmChoice}>
+                  확인
+                </button>
+                <button className="roll-btn small" onClick={skipChoice}>건너뛰기</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

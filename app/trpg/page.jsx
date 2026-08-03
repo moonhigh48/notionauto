@@ -116,6 +116,7 @@ export default function CoCCharacterSheet() {
       special: s[1] === "EDU" || s[1] === "DEX/2",
       checked: false,
       alloc: 0,
+      growth: 0,
       memo: "",
       custom: false,
     })),
@@ -143,12 +144,22 @@ export default function CoCCharacterSheet() {
   const busyRef = useRef(false);
 
   const [openMemoIds, setOpenMemoIds] = useState({});
+  const [mode, setMode] = useState("create"); // "create" | "growth"
+  const [improvingSkillId, setImprovingSkillId] = useState(null);
   const [occPreset, setOccPreset] = useState("");
 
-  const [notion, setNotion] = useState({ apiKey: "", databaseId: "", titleProp: "이름" });
+  const [notion, setNotion] = useState({ workerUrl: "", databaseId: "", titleProp: "이름" });
   const [notionOpen, setNotionOpen] = useState(false);
   const [notionReqOpen, setNotionReqOpen] = useState(false);
   const [notionStatus, setNotionStatus] = useState({ state: "idle", msg: "" });
+  const [currentPageId, setCurrentPageId] = useState(null);
+
+  // 탐사자 불러오기 서랍(drawer)
+  const [browserOpen, setBrowserOpen] = useState(false);
+  const [browserList, setBrowserList] = useState([]);
+  const [browserLoading, setBrowserLoading] = useState(false);
+  const [browserError, setBrowserError] = useState("");
+  const [browserSearch, setBrowserSearch] = useState("");
 
   function addLog(label, resultOrText, isEvent) {
     setLog((prev) => [
@@ -334,7 +345,7 @@ export default function CoCCharacterSheet() {
     return sk.base;
   }
   function skillTotal(sk) {
-    return skillBaseValue(sk) + (parseInt(sk.alloc) || 0);
+    return skillBaseValue(sk) + (parseInt(sk.alloc) || 0) + (parseInt(sk.growth) || 0);
   }
 
   const hpMax = Math.floor((store.attrs.CON + store.attrs.SIZ) / 10);
@@ -373,6 +384,7 @@ export default function CoCCharacterSheet() {
       special: false,
       checked: false,
       alloc: 0,
+      growth: 0,
       memo: "",
       custom: true,
     });
@@ -385,6 +397,24 @@ export default function CoCCharacterSheet() {
   }
   function toggleMemoOpen(id) {
     setOpenMemoIds((prev) => ({ ...prev, [id]: !prev[id] }));
+  }
+
+  /* ---------- growth (성장) ---------- */
+
+  async function improveSkill(sk) {
+    if (improvingSkillId) return;
+    setImprovingSkillId(sk.id);
+    const before = skillTotal(sk);
+    const res = await animateAndRoll(1, 100, `성장 판정 · ${sk.name} (현재 ${before})`);
+    if (res.total > before) {
+      const inc = await animateAndRoll(1, 10, `${sk.name} 성장 성공 → 증가량`);
+      sk.growth = (sk.growth || 0) + inc.total;
+      addLog("성장 판정 결과", `${sk.name} +${inc.total} → ${skillTotal(sk)}`, true);
+      forceRender();
+    } else {
+      addLog("성장 판정 결과", `${sk.name} 변화 없음 (판정 실패, ${res.total} ≤ ${before})`, true);
+    }
+    setImprovingSkillId(null);
   }
 
   /* ---------- occupation preset ---------- */
@@ -404,12 +434,12 @@ export default function CoCCharacterSheet() {
     forceRender();
   }
 
-  /* ---------- notion sync ---------- */
+  /* ---------- notion sync (via Cloudflare Worker proxy) ---------- */
 
   function buildNotionProperties() {
     const skillDump = store.skills
-      .filter((sk) => sk.checked || (parseInt(sk.alloc) || 0) > 0 || sk.memo)
-      .map((sk) => ({ 이름: sk.name, 직업기능: sk.checked, 합계: skillTotal(sk), 메모: sk.memo || "" }));
+      .filter((sk) => sk.checked || (parseInt(sk.alloc) || 0) > 0 || (parseInt(sk.growth) || 0) > 0 || sk.memo)
+      .map((sk) => ({ 이름: sk.name, 직업기능: sk.checked, 합계: skillTotal(sk), 배분: sk.alloc || 0, 성장: sk.growth || 0, 메모: sk.memo || "" }));
     return {
       [notion.titleProp || "이름"]: { title: [{ text: { content: info.name || "이름 없는 탐사자" } }] },
       "직업": { rich_text: [{ text: { content: info.occupation || "" } }] },
@@ -417,42 +447,148 @@ export default function CoCCharacterSheet() {
       "HP": { number: hpCur ?? hpMax },
       "MP": { number: mpCur ?? mpMax },
       "SAN": { number: sanCur ?? store.attrs.POW },
-      "특성치": { rich_text: [{ text: { content: JSON.stringify(store.attrs) } }] },
+      "특성치": { rich_text: [{ text: { content: JSON.stringify({ attrs: store.attrs, info, pools: { poolOcc, poolInt, poolGrowth } }) } }] },
       "기능치": { rich_text: [{ text: { content: JSON.stringify(skillDump).slice(0, 1900) } }] },
       "최종 동기화": { date: { start: new Date().toISOString() } },
     };
   }
 
+  function workerBase() {
+    return (notion.workerUrl || "").replace(/\/+$/, "");
+  }
+
   async function syncToNotion() {
-    if (!notion.apiKey || !notion.databaseId) {
-      setNotionStatus({ state: "error", msg: "연동 키와 데이터베이스 ID를 먼저 입력해줘." });
+    if (!notion.workerUrl || !notion.databaseId) {
+      setNotionStatus({ state: "error", msg: "Worker URL과 데이터베이스 ID를 먼저 입력해줘." });
       return;
     }
     setNotionStatus({ state: "busy", msg: "동기화 중…" });
     try {
-      const res = await fetch("https://api.notion.com/v1/pages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${notion.apiKey}`,
-          "Notion-Version": "2022-06-28",
-        },
-        body: JSON.stringify({
-          parent: { database_id: notion.databaseId },
-          properties: buildNotionProperties(),
-        }),
+      const isUpdate = !!currentPageId;
+      const url = isUpdate ? `${workerBase()}/pages/${currentPageId}` : `${workerBase()}/pages`;
+      const res = await fetch(url, {
+        method: isUpdate ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          isUpdate
+            ? { properties: buildNotionProperties() }
+            : { databaseId: notion.databaseId, properties: buildNotionProperties() }
+        ),
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err?.message || `HTTP ${res.status}`);
-      }
-      setNotionStatus({ state: "ok", msg: "노션에 저장했어." });
-      addLog("노션 동기화", "탐사자 정보를 노션 데이터베이스에 저장함", true);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
+      if (!isUpdate && data.id) setCurrentPageId(data.id);
+      setNotionStatus({ state: "ok", msg: isUpdate ? "노션 페이지를 갱신했어." : "노션에 새 탐사자로 저장했어." });
+      addLog("노션 동기화", isUpdate ? "기존 탐사자 정보를 갱신함" : "새 탐사자로 노션에 저장함", true);
     } catch (e) {
       setNotionStatus({
         state: "error",
-        msg: `동기화 실패: ${e.message}. 브라우저에서 노션 API를 직접 호출하면 CORS 정책에 막힐 수 있어 — 그럴 땐 이 요청을 대신 전달해줄 작은 프록시 서버(Cloudflare Worker 등)가 필요해.`,
+        msg: `동기화 실패: ${e.message}. Worker URL이 올바른지, Worker가 배포돼 있는지, 데이터베이스가 이 연동에 "연결(Connect)"돼 있는지 확인해줘.`,
       });
+    }
+  }
+
+  function startNewCharacterLink() {
+    setCurrentPageId(null);
+    setNotionStatus({ state: "idle", msg: "" });
+    addLog("노션 연동 해제", "다음 저장부터는 새 탐사자로 생성돼", true);
+  }
+
+  async function loadNotionList() {
+    if (!notion.workerUrl || !notion.databaseId) {
+      setBrowserError("먼저 ⚙ 노션 연동에서 Worker URL과 데이터베이스 ID를 설정해줘.");
+      return;
+    }
+    setBrowserLoading(true);
+    setBrowserError("");
+    try {
+      const res = await fetch(`${workerBase()}/query`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ databaseId: notion.databaseId, page_size: 50 }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
+      const titleProp = notion.titleProp || "이름";
+      const list = (data.results || []).map((page) => {
+        const props = page.properties || {};
+        const nameArr = props[titleProp]?.title || [];
+        const name = nameArr.map((t) => t.plain_text).join("") || "이름 없음";
+        const occ = props["직업"]?.rich_text?.map((t) => t.plain_text).join("") || "";
+        const ageVal = props["나이"]?.number ?? "";
+        return { id: page.id, name, occupation: occ, age: ageVal, editedAt: page.last_edited_time };
+      });
+      setBrowserList(list);
+    } catch (e) {
+      setBrowserError(`목록을 불러오지 못했어: ${e.message}`);
+    } finally {
+      setBrowserLoading(false);
+    }
+  }
+
+  async function loadCharacterFromNotion(pageId) {
+    setBrowserLoading(true);
+    setBrowserError("");
+    try {
+      const res = await fetch(`${workerBase()}/pages/${pageId}`);
+      const page = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(page?.message || `HTTP ${res.status}`);
+      const props = page.properties || {};
+      const titleProp = notion.titleProp || "이름";
+      const name = (props[titleProp]?.title || []).map((t) => t.plain_text).join("");
+      const occupation = (props["직업"]?.rich_text || []).map((t) => t.plain_text).join("");
+      const ageVal = props["나이"]?.number ?? 25;
+      const rawAttrs = (props["특성치"]?.rich_text || []).map((t) => t.plain_text).join("");
+      const rawSkills = (props["기능치"]?.rich_text || []).map((t) => t.plain_text).join("");
+
+      let parsedAttrs = null,
+        parsedInfo = null,
+        parsedPools = null;
+      try {
+        const j = JSON.parse(rawAttrs);
+        parsedAttrs = j.attrs || j;
+        parsedInfo = j.info || null;
+        parsedPools = j.pools || null;
+      } catch (e) {}
+      let parsedSkills = [];
+      try {
+        parsedSkills = JSON.parse(rawSkills);
+      } catch (e) {}
+
+      if (parsedAttrs) Object.assign(store.attrs, parsedAttrs);
+      store.skills.forEach((sk) => {
+        const found = parsedSkills.find((p) => p.이름 === sk.name);
+        sk.checked = found ? !!found.직업기능 : false;
+        sk.alloc = found ? found.배분 || 0 : 0;
+        sk.growth = found ? found.성장 || 0 : 0;
+        sk.memo = found ? found.메모 || "" : "";
+      });
+      setInfo({
+        name,
+        occupation,
+        pl: parsedInfo?.pl || "",
+        gender: parsedInfo?.gender || "",
+        birthplace: parsedInfo?.birthplace || "",
+        residence: parsedInfo?.residence || "",
+      });
+      setAge(ageVal || 25);
+      if (parsedPools) {
+        setPoolOcc(parsedPools.poolOcc || 0);
+        setPoolInt(parsedPools.poolInt || 0);
+        setPoolGrowth(parsedPools.poolGrowth || 0);
+      }
+      setHpCur(props["HP"]?.number ?? null);
+      setMpCur(props["MP"]?.number ?? null);
+      setSanCur(props["SAN"]?.number ?? null);
+      setCurrentPageId(pageId);
+      setOccPreset("");
+      forceRender();
+      addLog("탐사자 불러오기", `"${name}" 정보를 노션에서 불러옴`, true);
+      setBrowserOpen(false);
+    } catch (e) {
+      setBrowserError(`불러오기 실패: ${e.message}`);
+    } finally {
+      setBrowserLoading(false);
     }
   }
 
@@ -890,9 +1026,81 @@ aside.dice-panel{
 .req-table th,.req-table td{ border:1px solid rgba(20,20,15,0.2); padding:5px 7px; text-align:left; }
 .req-table th{ background:rgba(20,20,15,0.08); font-family:var(--font-mono); font-size:10px; }
 
+/* ---- 햄버거 메뉴 버튼 ---- */
+.hamburger-btn{
+  position:absolute; top:14px; right:4px;
+  width:36px; height:30px; padding:6px 7px;
+  display:flex; flex-direction:column; justify-content:space-between;
+  background:rgba(143,170,92,0.1); border:1px solid rgba(143,170,92,0.35); border-radius:5px;
+  cursor:pointer;
+}
+.hamburger-btn span{ display:block; height:2px; background:var(--sick); border-radius:2px; }
+.hamburger-btn:hover{ background:rgba(143,170,92,0.22); }
+
+/* ---- 탐사자 불러오기 서랍 ---- */
+.drawer-overlay{
+  position:fixed; inset:0; background:rgba(6,8,6,0.6);
+  opacity:0; pointer-events:none; transition:opacity .2s ease; z-index:40;
+}
+.drawer-overlay.open{ opacity:1; pointer-events:auto; }
+.browser-drawer{
+  position:fixed; top:0; right:0; height:100vh; width:min(360px,88vw);
+  background:linear-gradient(180deg,#171c17,#0e120e); color:var(--panel);
+  box-shadow:-14px 0 40px rgba(0,0,0,0.55), inset 0 0 0 1px rgba(143,170,92,0.12);
+  transform:translateX(100%); transition:transform .25s cubic-bezier(.2,.8,.3,1);
+  z-index:41; display:flex; flex-direction:column;
+}
+.browser-drawer.open{ transform:translateX(0); }
+.drawer-head{
+  padding:14px 16px; display:flex; align-items:center; justify-content:space-between;
+  font-family:var(--font-display); font-size:15px; letter-spacing:0.06em; color:var(--sick);
+  border-bottom:1px solid rgba(143,170,92,0.18);
+}
+.drawer-body{ padding:14px 16px; overflow-y:auto; display:flex; flex-direction:column; gap:10px; }
+.drawer-toolbar{ display:flex; gap:8px; }
+.drawer-search{
+  flex:1; padding:7px 10px; border-radius:20px; border:1px solid rgba(143,170,92,0.35);
+  background:#0b0f0b; color:var(--panel); font-size:12px;
+}
+.browser-list{ display:flex; flex-direction:column; gap:8px; }
+.browser-row{
+  padding:9px 11px; border-radius:5px; cursor:pointer;
+  background:rgba(232,225,201,0.04); border-left:2px solid var(--moss);
+}
+.browser-row:hover{ background:rgba(232,225,201,0.09); }
+.browser-row.active{ border-left-color:var(--gold); background:rgba(165,136,63,0.12); }
+.brow-name{ font-family:var(--font-display); font-size:13.5px; }
+.brow-sub{ font-family:var(--font-mono); font-size:10.5px; color:var(--sick); margin-top:2px; }
+.brow-time{ font-family:var(--font-mono); font-size:9.5px; color:rgba(232,225,201,0.4); margin-top:3px; }
+
+/* ---- 생성/성장 모드 스위치 ---- */
+.mode-switch{ display:flex; border:1px solid rgba(143,170,92,0.4); border-radius:20px; overflow:hidden; }
+.mode-btn{
+  border:none; background:transparent; color:rgba(232,225,201,0.55);
+  font-family:var(--font-mono); font-size:10px; letter-spacing:0.04em;
+  padding:4px 10px; cursor:pointer;
+}
+.mode-btn.active{ background:rgba(143,170,92,0.28); color:var(--sick); }
+
+/* ---- 성장 판정 주사위 아이콘 ---- */
+.skill-row .sroll{ text-align:center; font-size:12px; cursor:pointer; opacity:0.55; }
+.skill-row .sroll:hover{ opacity:1; }
+.skill-row .sroll.busy{ animation: spin .3s linear infinite; opacity:1; }
+.skill-row .sroll.disabled{ opacity:0.2; pointer-events:none; }
+
       `}</style>
 
       <div className="masthead">
+        <button
+          className="hamburger-btn"
+          title="저장된 탐사자 불러오기"
+          onClick={() => {
+            setBrowserOpen(true);
+            loadNotionList();
+          }}
+        >
+          <span></span><span></span><span></span>
+        </button>
         <div className="eyebrow">Call of Cthulhu · 7th Edition</div>
         <h1>탐사자 생성 의식</h1>
         <div className="sub">미스카토닉의 서고에서 — 이름 없는 것들을 마주할 자를 빚는다</div>
@@ -1030,7 +1238,16 @@ aside.dice-panel{
           </Card>
 
           {/* 기능 */}
-          <Card title="탐사자 기능" tag="SKILLS">
+          <Card
+            title="탐사자 기능"
+            tag="SKILLS"
+            action={
+              <div className="mode-switch">
+                <button className={`mode-btn${mode === "create" ? " active" : ""}`} onClick={() => setMode("create")}>🛠 생성</button>
+                <button className={`mode-btn${mode === "growth" ? " active" : ""}`} onClick={() => setMode("growth")}>📈 성장</button>
+              </div>
+            }
+          >
             <div className="pool-bar">
               <div className="pool-box"><label>직업 기능 점수</label><input type="number" value={poolOcc} onChange={(e) => setPoolOcc(parseInt(e.target.value) || 0)} /></div>
               <div className="pool-box">
@@ -1092,16 +1309,26 @@ aside.dice-panel{
                               if (raw.length >= 2) e.target.blur();
                             }}
                           />
-                          <span className="stot">{total}</span>
+                          <span className="stot" title={`기본 ${base} + 배분 ${sk.alloc || 0}${sk.growth ? ` + 성장 ${sk.growth}` : ""}`}>{total}</span>
                           <span className="shalf">{Math.floor(total / 2)}</span>
                           <span className="sfifth">{Math.floor(total / 5)}</span>
-                          <span
-                            className={`smemo${sk.memo ? " filled" : ""}`}
-                            title="기능 메모"
-                            onClick={() => toggleMemoOpen(sk.id)}
-                          >
-                            📝
-                          </span>
+                          {mode === "growth" ? (
+                            <span
+                              className={`sroll${improvingSkillId && improvingSkillId !== sk.id ? " disabled" : ""}${improvingSkillId === sk.id ? " busy" : ""}`}
+                              title="성장 판정: 1D100 > 현재 기능치면 1D10만큼 증가"
+                              onClick={() => improveSkill(sk)}
+                            >
+                              🎲
+                            </span>
+                          ) : (
+                            <span
+                              className={`smemo${sk.memo ? " filled" : ""}`}
+                              title="기능 메모"
+                              onClick={() => toggleMemoOpen(sk.id)}
+                            >
+                              📝
+                            </span>
+                          )}
                           <span className="sdel" onClick={() => sk.custom && removeSkill(sk.id)}>
                             {sk.custom ? "✕" : ""}
                           </span>
@@ -1179,11 +1406,12 @@ aside.dice-panel{
             </div>
             <div className="modal-body">
               <div>
-                노션 데이터베이스를 이 시트의 외부 저장소로 사용해. 캐릭터 정보를 노션 페이지 하나로 저장하고, 필요할 때 다시 불러올 수 있어.{" "}
+                노션 데이터베이스를 이 시트의 외부 저장소로 사용해. Cloudflare Worker가 대신 노션 API를 호출해주기 때문에
+                브라우저에 연동 키를 넣을 필요가 없어 — Worker에 안전하게 보관돼 있어.{" "}
                 <span className="modal-link" onClick={() => setNotionReqOpen(true)}>→ 데이터베이스 필수 요건 보기</span>
               </div>
-              <Field label="노션 연동(Integration) 키">
-                <input type="password" placeholder="secret_..." value={notion.apiKey} onChange={(e) => setNotion({ ...notion, apiKey: e.target.value })} />
+              <Field label="Cloudflare Worker URL">
+                <input placeholder="https://your-worker.your-subdomain.workers.dev" value={notion.workerUrl} onChange={(e) => setNotion({ ...notion, workerUrl: e.target.value })} />
               </Field>
               <Field label="데이터베이스 ID">
                 <input placeholder="32자리 ID (데이터베이스 URL에서 확인)" value={notion.databaseId} onChange={(e) => setNotion({ ...notion, databaseId: e.target.value })} />
@@ -1191,15 +1419,23 @@ aside.dice-panel{
               <Field label="제목(Title) 속성 이름">
                 <input value={notion.titleProp} onChange={(e) => setNotion({ ...notion, titleProp: e.target.value })} />
               </Field>
-              <button className="roll-btn" onClick={syncToNotion}>
-                {notionStatus.state === "busy" ? "동기화 중…" : "지금 노션에 저장"}
-              </button>
+              <div className="row-inline" style={{ gap: 8 }}>
+                <button className="roll-btn" onClick={syncToNotion}>
+                  {notionStatus.state === "busy" ? "동기화 중…" : currentPageId ? "현재 탐사자 갱신 저장" : "새 탐사자로 저장"}
+                </button>
+                {currentPageId && (
+                  <button className="roll-btn small" onClick={startNewCharacterLink} title="지금 불러온 탐사자와의 연결을 끊고, 다음 저장부터 새 페이지로 생성해">
+                    링크 해제 (새로 저장)
+                  </button>
+                )}
+              </div>
+              {currentPageId && <div className="modal-hint">현재 이 시트는 노션의 기존 탐사자 페이지와 연결돼 있어. 저장하면 그 페이지가 갱신돼.</div>}
               {notionStatus.msg && (
                 <div className={`modal-status ${notionStatus.state === "error" ? "err" : "ok"}`}>{notionStatus.msg}</div>
               )}
               <div className="modal-hint">
-                참고: 이 시트가 별도 서버 없이 브라우저에서만 동작하는 경우, 노션 API 특유의 CORS 정책 때문에 직접 호출이 막힐 수 있어.
-                그럴 땐 이 저장 요청을 그대로 전달해주는 작은 프록시(예: Cloudflare Worker, Vercel 서버리스 함수)를 하나 두면 해결돼.
+                Worker를 아직 배포하지 않았다면, 함께 받은 notion-proxy-worker 코드를 Cloudflare에 배포하고
+                <code> wrangler secret put NOTION_API_KEY</code> 로 노션 연동 키를 등록한 뒤, 배포된 Worker 주소를 위에 입력해줘.
               </div>
             </div>
           </div>
@@ -1232,6 +1468,58 @@ aside.dice-panel{
           </div>
         </div>
       )}
+
+      <div className={`drawer-overlay${browserOpen ? " open" : ""}`} onClick={() => setBrowserOpen(false)} />
+      <aside className={`browser-drawer${browserOpen ? " open" : ""}`}>
+        <div className="drawer-head">
+          <span>저장된 탐사자들</span>
+          <button className="modal-close" onClick={() => setBrowserOpen(false)}>✕</button>
+        </div>
+        <div className="drawer-body">
+          {(!notion.workerUrl || !notion.databaseId) ? (
+            <div className="modal-hint">
+              먼저 <span className="modal-link" onClick={() => { setBrowserOpen(false); setNotionOpen(true); }}>⚙ 노션 연동</span>에서
+              Worker URL과 데이터베이스 ID를 설정해줘.
+            </div>
+          ) : (
+            <>
+              <div className="drawer-toolbar">
+                <input
+                  className="drawer-search"
+                  placeholder="이름/직업 검색…"
+                  value={browserSearch}
+                  onChange={(e) => setBrowserSearch(e.target.value)}
+                />
+                <button className="roll-btn small" onClick={loadNotionList} disabled={browserLoading}>
+                  {browserLoading ? "불러오는 중…" : "↻ 새로고침"}
+                </button>
+              </div>
+              {browserError && <div className="modal-status err">{browserError}</div>}
+              {!browserError && !browserLoading && browserList.length === 0 && (
+                <div className="modal-hint">아직 노션에 저장된 탐사자가 없어.</div>
+              )}
+              <div className="browser-list">
+                {browserList
+                  .filter(
+                    (c) =>
+                      !browserSearch ||
+                      c.name.toLowerCase().includes(browserSearch.toLowerCase()) ||
+                      c.occupation.toLowerCase().includes(browserSearch.toLowerCase())
+                  )
+                  .map((c) => (
+                    <div key={c.id} className={`browser-row${c.id === currentPageId ? " active" : ""}`} onClick={() => loadCharacterFromNotion(c.id)}>
+                      <div className="brow-name">{c.name}</div>
+                      <div className="brow-sub">
+                        {c.occupation || "직업 미상"} {c.age ? `· ${c.age}세` : ""}
+                      </div>
+                      <div className="brow-time">{c.editedAt ? new Date(c.editedAt).toLocaleString("ko-KR") : ""}</div>
+                    </div>
+                  ))}
+              </div>
+            </>
+          )}
+        </div>
+      </aside>
     </div>
   );
 }

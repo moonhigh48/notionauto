@@ -638,7 +638,7 @@ export default function CoCCharacterSheet() {
   }
 
   function workerBase() {
-    return (notion.workerUrl || "").replace(/\/+$/, "");
+    return (notion.apiKey || "").replace(/\/+$/, "");
   }
 
   async function syncToNotion() {
@@ -683,7 +683,7 @@ export default function CoCCharacterSheet() {
   }
 
   async function loadNotionList() {
-    if (!notion.workerUrl || !notion.databaseId) {
+    if (!notion.apiKey || !notion.databaseId) {
       setBrowserError("먼저 ⚙ 노션 연동에서 데이터베이스 ID를 설정해줘.");
       return;
     }
@@ -1638,7 +1638,7 @@ aside.dice-panel{
                 <span className="modal-link" onClick={() => setNotionReqOpen(true)}>→ 데이터베이스 필수 요건 보기</span>
               </div>
               <Field label="API 프록시 주소">
-                <input placeholder="/api/notion  또는  https://xxx.workers.dev" value={notion.workerUrl} onChange={(e) => setNotion({ ...notion, workerUrl: e.target.value })} />
+                <input placeholder="/api/notion  또는  https://xxx.workers.dev" value={notion.apiKey} onChange={(e) => setNotion({ ...notion, apiKey: e.target.value })} />
               </Field>
               <Field label="데이터베이스 ID">
                 <input placeholder="32자리 ID (데이터베이스 URL에서 확인)" value={notion.databaseId} onChange={(e) => setNotion({ ...notion, databaseId: e.target.value })} />
@@ -1705,7 +1705,7 @@ aside.dice-panel{
           <button className="modal-close" onClick={() => setBrowserOpen(false)}>✕</button>
         </div>
         <div className="drawer-body">
-          {(!notion.workerUrl || !notion.databaseId) ? (
+          {(!notion.apiKey || !notion.databaseId) ? (
             <div className="modal-hint">
               먼저 <span className="modal-link" onClick={() => { setBrowserOpen(false); setNotionOpen(true); }}>⚙ 노션 연동</span>에서
               데이터베이스 ID를 설정해줘.

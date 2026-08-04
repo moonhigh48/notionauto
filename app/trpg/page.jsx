@@ -136,9 +136,12 @@ const OCCUPATIONS = [
   },
 ];
 
+// 노션 데이터베이스의 제목(Title) 속성 이름. 데이터베이스를 만들 때 이 이름으로 맞춰야 해.
+const NOTION_TITLE_PROP = "이름";
+
 // 노션 동기화: 대상 데이터베이스에 미리 준비돼 있어야 하는 속성 목록.
 const NOTION_REQUIRED_PROPS = [
-  { name: "이름", type: "제목(Title)", note: "데이터베이스 기본 제목 속성. 이름이 다르면 설정에서 바꿔줘." },
+  { name: "이름", type: "제목(Title)", note: "데이터베이스 기본 제목 속성. 반드시 이 이름으로 만들어줘." },
   { name: "직업", type: "텍스트" },
   { name: "나이", type: "숫자" },
   { name: "HP", type: "숫자" },
@@ -233,15 +236,36 @@ export default function CoCCharacterSheet() {
   const [occSubName, setOccSubName] = useState("");
   const [choiceModal, setChoiceModal] = useState(null); // { title, options, count, picked, resolve }
 
-  const [notion, setNotion] = useState({
-    apiKey: "",        // 사용자가 직접 입력한 노션 API Key
-    databaseId: "",    // 사용자가 직접 입력한 데이터베이스 ID
-    titleProp: "제목"  // 노션 데이터베이스의 제목 속성 이름
+  const [notion, setNotion] = useState(() => {
+    // 브라우저에 이전에 저장해둔 API Key / 데이터베이스 ID가 있으면 최초 렌더링 때 바로 불러옴
+    if (typeof window === "undefined") return { apiKey: "", databaseId: "" };
+    try {
+      const saved = JSON.parse(localStorage.getItem("coc-notion-config") || "null");
+      return { apiKey: saved?.apiKey || "", databaseId: saved?.databaseId || "" };
+    } catch {
+      return { apiKey: "", databaseId: "" };
+    }
   });
   const [notionOpen, setNotionOpen] = useState(false);
   const [notionReqOpen, setNotionReqOpen] = useState(false);
   const [notionStatus, setNotionStatus] = useState({ state: "idle", msg: "" });
   const [currentPageId, setCurrentPageId] = useState(null);
+
+  // API Key / 데이터베이스 ID가 바뀔 때마다 브라우저(localStorage)에 자동 저장
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      if (notion.apiKey || notion.databaseId) {
+        localStorage.setItem("coc-notion-config", JSON.stringify({ apiKey: notion.apiKey, databaseId: notion.databaseId }));
+      }
+    } catch {
+      // 저장 공간이 없거나(시크릿 모드 등) 실패해도 앱 동작에는 지장 없음
+    }
+  }, [notion.apiKey, notion.databaseId]);
+
+  useEffect(() => {
+    if (typeof document !== "undefined") document.title = "탐사자 생성";
+  }, []);
 
   // 탐사자 불러오기 서랍(drawer)
   const [browserOpen, setBrowserOpen] = useState(false);
@@ -280,7 +304,7 @@ export default function CoCCharacterSheet() {
           addLog(label, result, false);
           resolve(result);
         }
-      }, 70);
+      }, 130);
     });
   }
 
@@ -625,7 +649,7 @@ export default function CoCCharacterSheet() {
       .filter((sk) => sk.checked || (parseInt(sk.alloc) || 0) > 0 || (parseInt(sk.growth) || 0) > 0 || sk.memo)
       .map((sk) => ({ 이름: sk.name, 직업기능: sk.checked, 합계: skillTotal(sk), 배분: sk.alloc || 0, 성장: sk.growth || 0, 메모: sk.memo || "" }));
     return {
-      [notion.titleProp || "이름"]: { title: [{ text: { content: info.name || "이름 없는 탐사자" } }] },
+      [NOTION_TITLE_PROP]: { title: [{ text: { content: info.name || "이름 없는 탐사자" } }] },
       "직업": { rich_text: [{ text: { content: info.occupation || "" } }] },
       "나이": { number: age || 0 },
       "HP": { number: hpCur ?? hpMax },
@@ -637,15 +661,39 @@ export default function CoCCharacterSheet() {
     };
   }
 
-  async function syncToNotion() {
+  // 현재 이름과 같은 제목을 가진 페이지가 데이터베이스에 이미 있는지 검색 -> 있으면 그 페이지 id, 없으면 null
+  async function findPageIdByName(name) {
+    const res = await fetch("/api/notion", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "query",
+        apiKey: notion.apiKey,
+        databaseId: notion.databaseId,
+        page_size: 1,
+        filter: { property: NOTION_TITLE_PROP, title: { equals: name } },
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
+    const hit = (data.results || [])[0];
+    return hit ? hit.id : null;
+  }
+
+  // 캐릭터 저장 버튼: 1) 같은 이름의 탐사자가 데이터베이스에 이미 있는지 확인 -> 2) 있으면 그 페이지 갱신, 없으면 새로 생성
+  async function saveCharacterToNotion() {
     if (!notion.apiKey || !notion.databaseId) {
       setNotionStatus({ state: "error", msg: "API Key와 데이터베이스 ID를 입력해줘." });
       return;
     }
+    if (!info.name) {
+      setNotionStatus({ state: "error", msg: "탐사자 이름을 먼저 입력해줘." });
+      return;
+    }
     setNotionStatus({ state: "busy", msg: "동기화 중…" });
     try {
-      // 우리가 만든 Next.js API Route로 요청 전송
-      const isUpdate = Boolean(currentPageId);
+      const targetPageId = currentPageId || (await findPageIdByName(info.name));
+      const isUpdate = Boolean(targetPageId);
       const res = await fetch("/api/notion", {
         method: "POST",
         headers: {
@@ -654,21 +702,21 @@ export default function CoCCharacterSheet() {
         body: JSON.stringify({
           apiKey: notion.apiKey,
           databaseId: notion.databaseId,
-          pageId: currentPageId || null, // 수정 시 pageId 전달, 신규 생성 시 null
-          properties: buildNotionProperties(), // 기존에 작성하신 속성 생성 함수
+          pageId: targetPageId || null, // 수정 시 pageId 전달, 신규 생성 시 null
+          properties: buildNotionProperties(),
         }),
       });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || "동기화 실패");
       }
-      setCurrentPageId(data.pageId);
-      setNotionStatus({ state: "ok", msg: isUpdate ? "노션 페이지를 갱신했어." : "노션에 새 탐사자로 저장했어." });
+      setCurrentPageId(data.pageId || targetPageId);
+      setNotionStatus({ state: "ok", msg: isUpdate ? "같은 이름의 기존 탐사자를 찾아 갱신했어." : "노션에 새 탐사자로 저장했어." });
       addLog("노션 동기화", isUpdate ? "기존 탐사자 정보를 갱신함" : "새 탐사자로 노션에 저장함", true);
     } catch (e) {
       setNotionStatus({
         state: "error",
-        msg: `동기화 실패: ${e.message}. 데이터베이스가 이 연동에 "연결(Connect)"돼 있는지 확인해줘.`,
+        msg: `동기화 실패: ${e.message}. 데이터베이스가 이 연동에 "연결(Connect)"돼 있는지, 제목 속성 이름이 "${NOTION_TITLE_PROP}"인지 확인해줘.`,
       });
     }
   }
@@ -694,10 +742,9 @@ export default function CoCCharacterSheet() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
-      const titleProp = notion.titleProp || "이름";
       const list = (data.results || []).map((page) => {
         const props = page.properties || {};
-        const nameArr = props[titleProp]?.title || [];
+        const nameArr = props[NOTION_TITLE_PROP]?.title || [];
         const name = nameArr.map((t) => t.plain_text).join("") || "이름 없음";
         const occ = props["직업"]?.rich_text?.map((t) => t.plain_text).join("") || "";
         const ageVal = props["나이"]?.number ?? "";
@@ -723,8 +770,7 @@ export default function CoCCharacterSheet() {
       const page = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(page?.error || page?.message || `HTTP ${res.status}`);
       const props = page.properties || {};
-      const titleProp = notion.titleProp || "이름";
-      const name = (props[titleProp]?.title || []).map((t) => t.plain_text).join("");
+      const name = (props[NOTION_TITLE_PROP]?.title || []).map((t) => t.plain_text).join("");
       const occupation = (props["직업"]?.rich_text || []).map((t) => t.plain_text).join("");
       const ageVal = props["나이"]?.number ?? 25;
       const rawAttrs = (props["특성치"]?.rich_text || []).map((t) => t.plain_text).join("");
@@ -838,7 +884,13 @@ body{
   padding:18px 0 26px;
   border-bottom:1px solid rgba(232,225,201,0.15);
   margin-bottom:26px;
-  position:relative;
+  position:sticky;
+  top:0;
+  z-index:50;
+  background:
+    radial-gradient(ellipse at 20% -10%, rgba(92,122,82,0.12), transparent 45%),
+    radial-gradient(ellipse at 90% 10%, rgba(122,49,49,0.10), transparent 40%),
+    var(--void);
 }
 .masthead .eyebrow{
   font-family:var(--font-mono);
@@ -1098,7 +1150,7 @@ aside.dice-panel{
 .die3d .f-left{ transform:rotateY(-90deg) translateZ(26px); }
 .die3d .f-top{ transform:rotateX(90deg) translateZ(26px); }
 .die3d .f-bottom{ transform:rotateX(-90deg) translateZ(26px); }
-.die3d.rolling{ animation:die-tumble .55s linear infinite; }
+.die3d.rolling{ animation:die-tumble .95s linear infinite; }
 .die3d.landed{ transition:transform .5s cubic-bezier(.2,.8,.3,1); transform:rotateX(-18deg) rotateY(24deg); }
 @keyframes die-tumble{
   0%{ transform:rotateX(0deg) rotateY(0deg) rotateZ(0deg); }
@@ -1316,7 +1368,7 @@ aside.dice-panel{
           <span></span><span></span><span></span>
         </button>
         <div className="eyebrow">Call of Cthulhu · 7th Edition</div>
-        <h1>탐사자 생성 의식</h1>
+        <h1>탐사자 생성</h1>
         <div className="sub">미스카토닉의 서고에서 — 이름 없는 것들을 마주할 자를 빚는다</div>
         <svg className="tentacle-rule" viewBox="0 0 120 10">
           <path d="M0 5 Q20 0 40 5 T80 5 T120 5" stroke="#8faa5c" fill="none" strokeWidth="1.5" />
@@ -1327,8 +1379,21 @@ aside.dice-panel{
         <main>
           {/* 탐사자 정보 */}
           <Card title="탐사자 정보" tag="INVESTIGATOR" action={
-            <button className="notion-btn" onClick={() => setNotionOpen(true)}>⚙ 노션 연동</button>
+            <div className="row-inline" style={{ gap: 6 }}>
+              <button
+                className="notion-btn"
+                onClick={saveCharacterToNotion}
+                disabled={notionStatus.state === "busy"}
+                title="같은 이름의 탐사자가 있으면 갱신하고, 없으면 새로 만들어 노션에 저장해"
+              >
+                {notionStatus.state === "busy" ? "저장 중…" : "💾 캐릭터 저장"}
+              </button>
+              <button className="notion-btn" onClick={() => setNotionOpen(true)}>⚙ 노션 연동</button>
+            </div>
           }>
+            {notionStatus.msg && (
+              <div className={`modal-status ${notionStatus.state === "error" ? "err" : "ok"}`} style={{ marginBottom: 10 }}>{notionStatus.msg}</div>
+            )}
             <div className="grid cols-3">
               <Field label="이름"><input type="text" value={info.name} onChange={(e) => setInfo({ ...info, name: e.target.value })} /></Field>
               <Field label="PL"><input type="text" value={info.pl} onChange={(e) => setInfo({ ...info, pl: e.target.value })} /></Field>
@@ -1634,28 +1699,34 @@ aside.dice-panel{
             </div>
             <div className="modal-body">
               <div>
-                노션 데이터베이스를 이 시트의 외부 저장소로 사용해. 아래 API 프록시(서버)가 대신 노션 API를
-                호출해주기 때문에 브라우저에 연동 키를 넣을 필요가 없어 — 키는 서버에만 안전하게 보관돼.{" "}
+                노션 데이터베이스를 이 시트의 외부 저장소로 사용해. 아래에 입력한 API Key와 데이터베이스 ID는
+                이 브라우저에만 저장되고(다음에 다시 입력할 필요 없음), 저장/불러오기를 할 때만 서버의
+                API 프록시를 통해 노션 API로 전달돼.{" "}
                 <span className="modal-link" onClick={() => setNotionReqOpen(true)}>→ 데이터베이스 필수 요건 보기</span>
               </div>
-              <Field label="API 프록시 주소">
-                <input placeholder="notion API key를 입력하세요" value={notion.apiKey} onChange={(e) => setNotion({ ...notion, apiKey: e.target.value })} />
+              <Field label="노션 API Key">
+                <input placeholder="secret_... 또는 ntn_..." value={notion.apiKey} onChange={(e) => setNotion({ ...notion, apiKey: e.target.value })} />
               </Field>
               <Field label="데이터베이스 ID">
                 <input placeholder="32자리 ID (데이터베이스 URL에서 확인)" value={notion.databaseId} onChange={(e) => setNotion({ ...notion, databaseId: e.target.value })} />
               </Field>
-              <Field label="제목(Title) 속성 이름">
-                <input value={notion.titleProp} onChange={(e) => setNotion({ ...notion, titleProp: e.target.value })} />
-              </Field>
+              <div className="modal-hint">
+                제목(Title) 속성 이름은 <code>{NOTION_TITLE_PROP}</code>으로 고정돼 있어. 데이터베이스의 제목 속성 이름도 반드시
+                <code> {NOTION_TITLE_PROP}</code>으로 맞춰줘 (자세한 내용은 위 "필수 요건 보기" 참고).
+              </div>
               <div className="row-inline" style={{ gap: 8 }}>
-                <button className="roll-btn" onClick={syncToNotion}>
-                  {notionStatus.state === "busy" ? "동기화 중…" : currentPageId ? "현재 탐사자 갱신 저장" : "새 탐사자로 저장"}
+                <button className="roll-btn" onClick={saveCharacterToNotion}>
+                  {notionStatus.state === "busy" ? "저장 중…" : "캐릭터 저장"}
                 </button>
                 {currentPageId && (
                   <button className="roll-btn small" onClick={startNewCharacterLink} title="지금 불러온 탐사자와의 연결을 끊고, 다음 저장부터 새 페이지로 생성해">
                     링크 해제 (새로 저장)
                   </button>
                 )}
+              </div>
+              <div className="modal-hint">
+                "캐릭터 저장"을 누르면 같은 이름의 탐사자가 데이터베이스에 이미 있는지 자동으로 확인해서,
+                있으면 그 페이지를 갱신하고 없으면 새로 만들어.
               </div>
               {currentPageId && <div className="modal-hint">현재 이 시트는 노션의 기존 탐사자 페이지와 연결돼 있어. 저장하면 그 페이지가 갱신돼.</div>}
               {notionStatus.msg && (
